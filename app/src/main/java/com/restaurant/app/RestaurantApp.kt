@@ -460,7 +460,18 @@ fun RestaurantApp() {
 @Composable
 fun MenuScreen(viewModel: RestaurantViewModel) {
     var showTableSelector by remember { mutableStateOf(false) }
-    
+    var searchQuery by remember { mutableStateOf("") }
+
+    // Filtrar items según búsqueda
+    val filteredItems = if (searchQuery.isBlank()) {
+        viewModel.menuItems
+    } else {
+        viewModel.menuItems.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+                    it.category.contains(searchQuery, ignoreCase = true)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("Menú del Restaurante") },
@@ -468,12 +479,30 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                 IconButton(onClick = { viewModel.loadMenu() }) {
                     Icon(Icons.Default.Refresh, contentDescription = "Actualizar")
                 }
-                IconButton(onClick = { /* Imprimir comanda */ }) {
+                IconButton(onClick = { }) {
                     Icon(Icons.Default.Print, contentDescription = "Imprimir")
                 }
             }
         )
-        
+
+        // Campo de búsqueda
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            placeholder = { Text("Buscar en el menú...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = {
+                if (searchQuery.isNotBlank()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Clear, contentDescription = "Limpiar")
+                    }
+                }
+            },
+            singleLine = true
+        )
         // Items en la comanda actual
         if (viewModel.currentOrder.isNotEmpty()) {
             Card(
@@ -541,7 +570,7 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
         }
         
         // Agrupar items por categoría
-        val itemsByCategory = viewModel.menuItems.groupBy { it.category }
+        val itemsByCategory = filteredItems.groupBy { it.category }
         
         LazyColumn(
             contentPadding = PaddingValues(8.dp),
