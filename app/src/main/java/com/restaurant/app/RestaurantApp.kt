@@ -76,7 +76,6 @@ data class OrderItemDetail(
     val notes: String
 )
 
-// Comanda guardada en historial (solo local, en memoria)
 data class HistorialEntry(
     val order: Order,
     val propina: Double,
@@ -99,7 +98,6 @@ class ApiClient(private val baseUrl: String) {
         connection.readTimeout = 5000
         val response = connection.inputStream.bufferedReader().readText()
         connection.disconnect()
-        android.util.Log.d("API_DEBUG", "Respuesta recibida: ${response.take(200)}")
         val json = JSONObject(response)
         val data = json.getJSONArray("data")
         List(data.length()) { i ->
@@ -158,19 +156,16 @@ class ApiClient(private val baseUrl: String) {
         val body = JSONObject()
         body.put("table_id", tableId)
         body.put("items", itemsArray)
-        android.util.Log.d("API_DEBUG", "JSON enviado: $body")
         connection.outputStream.use { os ->
             os.write(body.toString().toByteArray(Charsets.UTF_8))
             os.flush()
         }
         val responseCode = connection.responseCode
-        android.util.Log.d("API_DEBUG", "HTTP response code: $responseCode")
         val response = if (responseCode >= 400) {
             connection.errorStream.bufferedReader().readText()
         } else {
             connection.inputStream.bufferedReader().readText()
         }
-        android.util.Log.d("API_DEBUG", "Respuesta del servidor: $response")
         connection.disconnect()
         val json = JSONObject(response)
         json.optString("message", json.optString("error", "Sin respuesta"))
@@ -233,6 +228,50 @@ class ApiClient(private val baseUrl: String) {
         val json = JSONObject(response)
         json.getString("message")
     }
+
+    suspend fun addItemToOrder(orderId: Int, menuItemId: Int, quantity: Int, notes: String): Result<String> = runCatching {
+        val url = URL("$baseUrl/orders/$orderId/items")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+        val body = JSONObject()
+        body.put("menu_item_id", menuItemId)
+        body.put("quantity", quantity)
+        body.put("notes", notes)
+        connection.outputStream.use { os ->
+            os.write(body.toString().toByteArray(Charsets.UTF_8))
+            os.flush()
+        }
+        val responseCode = connection.responseCode
+        val response = if (responseCode >= 400) {
+            connection.errorStream.bufferedReader().readText()
+        } else {
+            connection.inputStream.bufferedReader().readText()
+        }
+        connection.disconnect()
+        val json = JSONObject(response)
+        json.optString("message", json.optString("error", "Sin respuesta"))
+    }
+
+    suspend fun removeItemFromOrder(orderId: Int, itemId: Int): Result<String> = runCatching {
+        val url = URL("$baseUrl/orders/$orderId/items/$itemId")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "DELETE"
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+        val responseCode = connection.responseCode
+        val response = if (responseCode >= 400) {
+            connection.errorStream.bufferedReader().readText()
+        } else {
+            connection.inputStream.bufferedReader().readText()
+        }
+        connection.disconnect()
+        val json = JSONObject(response)
+        json.optString("message", json.optString("error", "Sin respuesta"))
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -248,13 +287,12 @@ class RestaurantViewModel(private val apiClient: ApiClient) : ViewModel() {
     var tables by mutableStateOf(listOf<Table>())
     var orders by mutableStateOf(listOf<Order>())
 
-    // Historial local del día (en memoria)
     var historial by mutableStateOf(listOf<HistorialEntry>())
-
-    // Clave de seguridad configurable
     var claveSeguridad by mutableStateOf("1234")
 
-    // Comanda en construcción
+    // Guarniciones configurables del día
+    var guarnicionesDelDia by mutableStateOf(listOf<String>())
+
     var currentOrder by mutableStateOf(listOf<OrderItem>())
     var selectedTable by mutableStateOf<Table?>(null)
 
@@ -342,20 +380,29 @@ class RestaurantViewModel(private val apiClient: ApiClient) : ViewModel() {
         }
     }
 
+    fun addItemToExistingOrder(orderId: Int, menuItem: MenuItem, notes: String = "") {
+        viewModelScope.launch(Dispatchers.IO) {
+            apiClient.addItemToOrder(orderId, menuItem.id, 1, notes)
+                .onSuccess { loadOrders() }
+                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al agregar item: ${error.message}" } }
+        }
+    }
+
+    fun removeItemFromExistingOrder(orderId: Int, itemId: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            apiClient.removeItemFromOrder(orderId, itemId)
+                .onSuccess { loadOrders() }
+                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al eliminar item: ${error.message}" } }
+        }
+    }
+
     fun guardarEnHistorial(order: Order) {
         val propina = order.total * 0.10
         val totalConPropina = order.total + propina
         val ahora = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
             .format(java.util.Date())
-        val entry = HistorialEntry(
-            order = order,
-            propina = propina,
-            totalConPropina = totalConPropina,
-            fechaGuardado = ahora
-        )
-        // Insertar al inicio para que la última quede arriba
+        val entry = HistorialEntry(order = order, propina = propina, totalConPropina = totalConPropina, fechaGuardado = ahora)
         historial = listOf(entry) + historial
-        // Marcar como cancelled en servidor para que desaparezca de Terminadas
         updateOrderStatus(order.orderId, "cancelled")
     }
 
@@ -373,21 +420,12 @@ fun formatCLP(amount: Double): String {
     return "$$formatted"
 }
 
-// 10 tonos de verde para el historial
 val verdesHistorial = listOf(
-    Color(0xFFE8F5E9),
-    Color(0xFFC8E6C9),
-    Color(0xFFA5D6A7),
-    Color(0xFF81C784),
-    Color(0xFF66BB6A),
-    Color(0xFF4CAF50),
-    Color(0xFF43A047),
-    Color(0xFF388E3C),
-    Color(0xFF2E7D32),
-    Color(0xFF1B5E20)
+    Color(0xFFE8F5E9), Color(0xFFC8E6C9), Color(0xFFA5D6A7), Color(0xFF81C784),
+    Color(0xFF66BB6A), Color(0xFF4CAF50), Color(0xFF43A047), Color(0xFF388E3C),
+    Color(0xFF2E7D32), Color(0xFF1B5E20)
 )
 
-// Opciones fijas por nombre de producto
 val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
     "jugo natural" to listOf("Frambuesa", "Piña", "Frutilla", "Arándanos"),
     "jugo natural tropical" to listOf("Mango", "Maracuyá", "Chirimoya"),
@@ -395,6 +433,12 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
     "limonada menta/jengibre" to listOf("Azúcar", "Endulzante"),
     "Mojito frutal" to listOf("Frambuesa", "Frutilla", "Mango", "Piña")
 )
+
+// Productos que usan el diálogo de Menú completo (entrada + guarnición)
+val ITEMS_CON_MENU = listOf("Menu normal", "Menu Extra")
+
+// Entradas fijas siempre disponibles
+val ENTRADAS_FIJAS = listOf("Crema de zapallo", "Consomé", "Ensalada")
 
 // ═══════════════════════════════════════════════════════════════
 // SPLASH SCREEN
@@ -407,40 +451,20 @@ fun SplashScreen(onFinished: () -> Unit) {
         onFinished()
     }
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.primary),
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Restaurant,
-                contentDescription = null,
-                modifier = Modifier.size(80.dp),
-                tint = MaterialTheme.colorScheme.onPrimary
-            )
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Icon(imageVector = Icons.Default.Restaurant, contentDescription = null,
+                modifier = Modifier.size(80.dp), tint = MaterialTheme.colorScheme.onPrimary)
             Spacer(modifier = Modifier.height(24.dp))
-            Text(
-                text = "Comandas Manager",
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onPrimary
-            )
+            Text("Comandas Manager", fontSize = 28.sp, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimary)
             Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Frontend & Backend by Liebr3, powered by Raspberry Pi",
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f)
-            )
+            Text("Frontend & Backend by Liebr3, powered by Raspberry Pi", fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f))
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = "2026",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f)
-            )
+            Text("2026", fontSize = 12.sp, color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.6f))
         }
     }
 }
@@ -452,7 +476,6 @@ fun SplashScreen(onFinished: () -> Unit) {
 @Composable
 fun RestaurantApp() {
     var showSplash by remember { mutableStateOf(true) }
-
     if (showSplash) {
         SplashScreen(onFinished = { showSplash = false })
         return
@@ -466,30 +489,14 @@ fun RestaurantApp() {
     Scaffold(
         bottomBar = {
             NavigationBar {
-                NavigationBarItem(
-                    icon = { Icon(Icons.Default.Restaurant, contentDescription = null) },
-                    label = { Text("Menú") },
-                    selected = currentScreen == "menu",
-                    onClick = { currentScreen = "menu" }
-                )
-                NavigationBarItem(
-                    icon = { Icon(Icons.Default.ListAlt, contentDescription = null) },
-                    label = { Text("Comandas") },
-                    selected = currentScreen == "orders",
-                    onClick = { currentScreen = "orders" }
-                )
-                NavigationBarItem(
-                    icon = { Icon(Icons.Default.History, contentDescription = null) },
-                    label = { Text("Historial") },
-                    selected = currentScreen == "historial",
-                    onClick = { currentScreen = "historial" }
-                )
-                NavigationBarItem(
-                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    label = { Text("Config") },
-                    selected = currentScreen == "config",
-                    onClick = { currentScreen = "config" }
-                )
+                NavigationBarItem(icon = { Icon(Icons.Default.Restaurant, null) }, label = { Text("Menú") },
+                    selected = currentScreen == "menu", onClick = { currentScreen = "menu" })
+                NavigationBarItem(icon = { Icon(Icons.Default.ListAlt, null) }, label = { Text("Comandas") },
+                    selected = currentScreen == "orders", onClick = { currentScreen = "orders" })
+                NavigationBarItem(icon = { Icon(Icons.Default.History, null) }, label = { Text("Historial") },
+                    selected = currentScreen == "historial", onClick = { currentScreen = "historial" })
+                NavigationBarItem(icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Config") },
+                    selected = currentScreen == "config", onClick = { currentScreen = "config" })
             }
         }
     ) { paddingValues ->
@@ -505,9 +512,7 @@ fun RestaurantApp() {
                     onDismissRequest = { viewModel.errorMessage = null },
                     title = { Text("Error") },
                     text = { Text(error) },
-                    confirmButton = {
-                        TextButton(onClick = { viewModel.errorMessage = null }) { Text("OK") }
-                    }
+                    confirmButton = { TextButton(onClick = { viewModel.errorMessage = null }) { Text("OK") } }
                 )
             }
             if (viewModel.isLoading) {
@@ -520,7 +525,7 @@ fun RestaurantApp() {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// DIALOGO OPCIONES DE ITEM
+// DIÁLOGO OPCIONES SIMPLES
 // ═══════════════════════════════════════════════════════════════
 
 @Composable
@@ -541,31 +546,91 @@ fun ItemOptionsDialog(
                 options.forEach { option ->
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                if (selected.contains(option)) selected.remove(option)
-                                else selected.add(option)
-                            }
-                            .padding(vertical = 4.dp)
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            if (selected.contains(option)) selected.remove(option) else selected.add(option)
+                        }.padding(vertical = 4.dp)
                     ) {
-                        Checkbox(
-                            checked = selected.contains(option),
-                            onCheckedChange = {
-                                if (it) selected.add(option) else selected.remove(option)
-                            }
-                        )
+                        Checkbox(checked = selected.contains(option), onCheckedChange = {
+                            if (it) selected.add(option) else selected.remove(option)
+                        })
                         Text(option, modifier = Modifier.padding(start = 8.dp))
                     }
                 }
             }
         },
-        confirmButton = {
-            Button(onClick = { onConfirm(selected.joinToString(", ")) }) { Text("Agregar") }
+        confirmButton = { Button(onClick = { onConfirm(selected.joinToString(", ")) }) { Text("Agregar") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DIÁLOGO MENÚ NORMAL / MENÚ EXTRA
+// ═══════════════════════════════════════════════════════════════
+
+@Composable
+fun MenuCompletoDialog(
+    item: MenuItem,
+    guarniciones: List<String>,
+    onConfirm: (notas: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val entradaSeleccionada = remember { mutableStateOf<String?>(null) }
+    val guarnicionSeleccionada = remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(item.name, fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                Text("Entrada:", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                ENTRADAS_FIJAS.forEach { entrada ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            entradaSeleccionada.value = entrada
+                        }.padding(vertical = 2.dp)
+                    ) {
+                        RadioButton(selected = entradaSeleccionada.value == entrada,
+                            onClick = { entradaSeleccionada.value = entrada })
+                        Text(entrada, modifier = Modifier.padding(start = 4.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider()
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text("Guarnición:", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                if (guarniciones.isEmpty()) {
+                    Text("No hay guarniciones configuradas para hoy.", fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, fontStyle = FontStyle.Italic)
+                } else {
+                    guarniciones.forEach { guarnicion ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                guarnicionSeleccionada.value = guarnicion
+                            }.padding(vertical = 2.dp)
+                        ) {
+                            RadioButton(selected = guarnicionSeleccionada.value == guarnicion,
+                                onClick = { guarnicionSeleccionada.value = guarnicion })
+                            Text(guarnicion, modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+                }
+            }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancelar") }
-        }
+        confirmButton = {
+            Button(onClick = {
+                val partes = mutableListOf<String>()
+                entradaSeleccionada.value?.let { partes.add("Entrada: $it") }
+                guarnicionSeleccionada.value?.let { partes.add("Guarnición: $it") }
+                onConfirm(partes.joinToString(" | "))
+            }) { Text("Agregar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
     )
 }
 
@@ -579,14 +644,12 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
     var showTableSelector by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var itemWithOptions by remember { mutableStateOf<MenuItem?>(null) }
+    var itemWithMenuCompleto by remember { mutableStateOf<MenuItem?>(null) }
 
-    val filteredItems = if (searchQuery.isBlank()) {
-        viewModel.menuItems
-    } else {
-        viewModel.menuItems.filter {
-            it.name.contains(searchQuery, ignoreCase = true) ||
-                    it.category.contains(searchQuery, ignoreCase = true)
-        }
+    val filteredItems = if (searchQuery.isBlank()) viewModel.menuItems
+    else viewModel.menuItems.filter {
+        it.name.contains(searchQuery, ignoreCase = true) ||
+                it.category.contains(searchQuery, ignoreCase = true)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -602,9 +665,7 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
             placeholder = { Text("Buscar en el menú...") },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
             trailingIcon = {
@@ -618,18 +679,12 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
         )
 
         if (viewModel.currentOrder.isNotEmpty()) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp)
-            ) {
+            Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
                 Column(modifier = Modifier.padding(8.dp)) {
                     Text("Comanda actual:", fontWeight = FontWeight.Bold)
                     viewModel.currentOrder.forEach { orderItem ->
                         Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -637,24 +692,17 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                                 Row {
                                     Text("${orderItem.quantity}x ${orderItem.menuItem.name}")
                                     if (orderItem.notes.isNotEmpty()) {
-                                        Text(
-                                            text = " (${orderItem.notes})",
-                                            fontSize = 12.sp,
+                                        Text(" (${orderItem.notes})", fontSize = 12.sp,
                                             fontStyle = FontStyle.Italic,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = {
-                                    viewModel.removeItemFromCurrentOrder(orderItem.menuItem, orderItem.notes)
-                                }) {
+                                IconButton(onClick = { viewModel.removeItemFromCurrentOrder(orderItem.menuItem, orderItem.notes) }) {
                                     Icon(Icons.Default.Remove, contentDescription = "Quitar uno")
                                 }
-                                IconButton(onClick = {
-                                    viewModel.addItemToCurrentOrder(orderItem.menuItem, orderItem.notes)
-                                }) {
+                                IconButton(onClick = { viewModel.addItemToCurrentOrder(orderItem.menuItem, orderItem.notes) }) {
                                     Icon(Icons.Default.Add, contentDescription = "Agregar uno")
                                 }
                                 IconButton(onClick = {
@@ -662,7 +710,8 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                                         !(it.menuItem.id == orderItem.menuItem.id && it.notes == orderItem.notes)
                                     }
                                 }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Eliminar", tint = MaterialTheme.colorScheme.error)
+                                    Icon(Icons.Default.Delete, contentDescription = "Eliminar",
+                                        tint = MaterialTheme.colorScheme.error)
                                 }
                             }
                         }
@@ -670,10 +719,7 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                     Spacer(modifier = Modifier.height(8.dp))
                     val total = viewModel.currentOrder.sumOf { it.quantity * it.menuItem.price }
                     Text("Total: ${formatCLP(total)}", fontWeight = FontWeight.Bold)
-                    Button(
-                        onClick = { showTableSelector = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
+                    Button(onClick = { showTableSelector = true }, modifier = Modifier.fillMaxWidth()) {
                         Text("Asignar a mesa")
                     }
                 }
@@ -682,26 +728,22 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
 
         val itemsByCategory = filteredItems.groupBy { it.category }
 
-        LazyColumn(
-            contentPadding = PaddingValues(8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
+        LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             itemsByCategory.forEach { (category, _) ->
                 item {
-                    Text(
-                        text = category,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
+                    Text(text = category, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(vertical = 8.dp))
                 }
                 items(filteredItems.filter { it.category == category }) { item ->
                     MenuItemCard(item) {
-                        val options = ITEM_OPTIONS[item.name]
-                        if (options != null) {
-                            itemWithOptions = item
-                        } else {
-                            viewModel.addItemToCurrentOrder(item)
+                        when {
+                            ITEMS_CON_MENU.any { it.equals(item.name, ignoreCase = true) } -> {
+                                itemWithMenuCompleto = item
+                            }
+                            ITEM_OPTIONS.containsKey(item.name) -> {
+                                itemWithOptions = item
+                            }
+                            else -> viewModel.addItemToCurrentOrder(item)
                         }
                     }
                 }
@@ -721,6 +763,18 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
         )
     }
 
+    itemWithMenuCompleto?.let { item ->
+        MenuCompletoDialog(
+            item = item,
+            guarniciones = viewModel.guarnicionesDelDia,
+            onConfirm = { notas ->
+                viewModel.addItemToCurrentOrder(item, notas)
+                itemWithMenuCompleto = null
+            },
+            onDismiss = { itemWithMenuCompleto = null }
+        )
+    }
+
     if (showTableSelector) {
         AlertDialog(
             onDismissRequest = { showTableSelector = false },
@@ -729,25 +783,17 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                 LazyColumn {
                     items(viewModel.tables) { table ->
                         Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(4.dp)
-                                .clickable {
-                                    viewModel.saveOrder(table)
-                                    showTableSelector = false
-                                }
+                            modifier = Modifier.fillMaxWidth().padding(4.dp).clickable {
+                                viewModel.saveOrder(table)
+                                showTableSelector = false
+                            }
                         ) {
-                            Text(
-                                "Mesa ${table.name} (${table.capacity} personas)",
-                                modifier = Modifier.padding(16.dp)
-                            )
+                            Text("Mesa ${table.name} (${table.capacity} personas)", modifier = Modifier.padding(16.dp))
                         }
                     }
                 }
             },
-            confirmButton = {
-                TextButton(onClick = { showTableSelector = false }) { Text("Cancelar") }
-            }
+            confirmButton = { TextButton(onClick = { showTableSelector = false }) { Text("Cancelar") } }
         )
     }
 }
@@ -755,20 +801,14 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
 @Composable
 fun MenuItemCard(item: MenuItem, onClick: () -> Unit) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
-            containerColor = if (item.isAvailable)
-                MaterialTheme.colorScheme.primaryContainer
-            else
-                MaterialTheme.colorScheme.surfaceVariant
+            containerColor = if (item.isAvailable) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -778,12 +818,8 @@ fun MenuItemCard(item: MenuItem, onClick: () -> Unit) {
                     Text(text = item.description, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            Text(
-                text = formatCLP(item.price),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
+            Text(text = formatCLP(item.price), fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary)
         }
     }
 }
@@ -812,16 +848,10 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
         )
 
         TabRow(selectedTabIndex = selectedTab) {
-            Tab(
-                selected = selectedTab == 0,
-                onClick = { selectedTab = 0; selectedOrder = null },
-                text = { Text("Activas (${activeOrders.size})") }
-            )
-            Tab(
-                selected = selectedTab == 1,
-                onClick = { selectedTab = 1; selectedOrder = null },
-                text = { Text("Terminadas (${terminatedOrders.size})") }
-            )
+            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0; selectedOrder = null },
+                text = { Text("Activas (${activeOrders.size})") })
+            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1; selectedOrder = null },
+                text = { Text("Terminadas (${terminatedOrders.size})") })
         }
 
         val ordersToShow = if (selectedTab == 0) activeOrders else terminatedOrders
@@ -835,10 +865,7 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
                     )
                 }
             } else {
-                LazyColumn(
-                    contentPadding = PaddingValues(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(ordersToShow) { order ->
                         OrderCard(order, showPrice = selectedTab == 1) { selectedOrder = order }
                     }
@@ -858,9 +885,7 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
 @Composable
 fun OrderCard(order: Order, showPrice: Boolean = false, onClick: () -> Unit) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = when (order.status) {
                 "pending" -> MaterialTheme.colorScheme.errorContainer
@@ -870,35 +895,35 @@ fun OrderCard(order: Order, showPrice: Boolean = false, onClick: () -> Unit) {
         )
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
                 Text(text = "Mesa ${order.tableNumber}", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    text = order.items.joinToString(", ") { "${it.quantity}x ${it.name}" },
-                    fontSize = 16.sp
-                )
+                Text(text = order.items.joinToString(", ") { "${it.quantity}x ${it.name}" }, fontSize = 16.sp)
                 Text(text = order.createdAt, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (showPrice) {
-                Text(
-                    text = formatCLP(order.total),
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                Text(text = formatCLP(order.total), fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary)
             }
         }
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// DETALLE DE COMANDA
+// ═══════════════════════════════════════════════════════════════
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boolean, onBack: () -> Unit) {
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var modoEdicion by remember { mutableStateOf(false) }
+    var itemWithOptions by remember { mutableStateOf<MenuItem?>(null) }
+    var itemWithMenuCompleto by remember { mutableStateOf<MenuItem?>(null) }
+
     val currentOrder = viewModel.orders.find { it.orderId == order.orderId } ?: order
     val propina = currentOrder.total * 0.10
     val totalConPropina = currentOrder.total + propina
@@ -908,149 +933,260 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             IconButton(onClick = onBack) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Volver")
             }
-            Text("Orden #${currentOrder.orderId}", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("Orden #${currentOrder.orderId}", fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f))
+            // Botón editar solo disponible en estado in_progress
+            if (currentOrder.status == "in_progress" && !isTerminada) {
+                IconButton(onClick = { modoEdicion = !modoEdicion }) {
+                    Icon(
+                        if (modoEdicion) Icons.Default.Check else Icons.Default.Edit,
+                        contentDescription = if (modoEdicion) "Finalizar edición" else "Editar comanda",
+                        tint = if (modoEdicion) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
         }
 
-        Card(modifier = Modifier.padding(16.dp)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Mesa ${currentOrder.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
-                Text("Estado: ${when(currentOrder.status) {
-                    "pending" -> "Pendiente"
-                    "in_progress" -> "En preparación"
-                    "completed" -> "Terminada"
-                    "cancelled" -> "Cancelada"
-                    else -> currentOrder.status
-                }}")
-                Text("Hora: ${currentOrder.createdAt}", fontSize = 14.sp)
+        if (modoEdicion) {
+            // ── MODO EDICIÓN ──
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)
+            ) {
+                Text("Modo edición activo — toca ✓ para finalizar", modifier = Modifier.padding(8.dp),
+                    fontSize = 13.sp, fontStyle = FontStyle.Italic,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer)
+            }
 
-                Divider(modifier = Modifier.padding(vertical = 16.dp))
-
-                currentOrder.items.forEach { item ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("${item.quantity}x ${item.name}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                            // Notas solo visibles en activas, no en terminadas
-                            if (item.notes.isNotEmpty() && !isTerminada) {
-                                Text(
-                                    text = item.notes,
-                                    fontSize = 13.sp,
-                                    fontStyle = FontStyle.Italic,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Items actuales:", fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    currentOrder.items.forEach { item ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("${item.quantity}x ${item.name}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                                if (item.notes.isNotEmpty()) {
+                                    Text(item.notes, fontSize = 12.sp, fontStyle = FontStyle.Italic,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            IconButton(onClick = { viewModel.removeItemFromExistingOrder(currentOrder.orderId, item.id) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Eliminar",
+                                    tint = MaterialTheme.colorScheme.error)
                             }
                         }
-                        // Precio solo visible en terminadas
-                        if (isTerminada) {
-                            Text(formatCLP(item.subtotal), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    }
+                }
+            }
+
+            var searchQuery by remember { mutableStateOf("") }
+            val filteredItems = if (searchQuery.isBlank()) viewModel.menuItems
+            else viewModel.menuItems.filter { it.name.contains(searchQuery, ignoreCase = true) }
+
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                placeholder = { Text("Buscar item para agregar...") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (searchQuery.isNotBlank()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Default.Clear, contentDescription = "Limpiar")
+                        }
+                    }
+                },
+                singleLine = true
+            )
+
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(filteredItems) { menuItem ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            when {
+                                ITEMS_CON_MENU.any { it.equals(menuItem.name, ignoreCase = true) } -> {
+                                    itemWithMenuCompleto = menuItem
+                                }
+                                ITEM_OPTIONS.containsKey(menuItem.name) -> {
+                                    itemWithOptions = menuItem
+                                }
+                                else -> viewModel.addItemToExistingOrder(currentOrder.orderId, menuItem)
+                            }
+                        },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(menuItem.name, fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f))
+                            Icon(Icons.Default.Add, contentDescription = "Agregar",
+                                tint = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }
+            }
 
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
+        } else {
+            // ── MODO VISTA NORMAL ──
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Mesa ${currentOrder.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text("Estado: ${when(currentOrder.status) {
+                        "pending" -> "Pendiente"
+                        "in_progress" -> "En preparación"
+                        "completed" -> "Terminada"
+                        "cancelled" -> "Cancelada"
+                        else -> currentOrder.status
+                    }}")
+                    Text("Hora: ${currentOrder.createdAt}", fontSize = 14.sp)
 
-                // Subtotal, propina y total solo en terminadas
-                if (isTerminada) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Subtotal:", fontSize = 16.sp)
-                        Text(formatCLP(currentOrder.total), fontSize = 16.sp)
+                    Divider(modifier = Modifier.padding(vertical = 16.dp))
+
+                    currentOrder.items.forEach { item ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("${item.quantity}x ${item.name}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                if (item.notes.isNotEmpty() && !isTerminada) {
+                                    Text(text = item.notes, fontSize = 13.sp, fontStyle = FontStyle.Italic,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            if (isTerminada) {
+                                Text(formatCLP(item.subtotal), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            }
+                        }
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Propina (10%):", fontSize = 16.sp)
-                        Text(formatCLP(propina), fontSize = 16.sp)
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Divider()
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("TOTAL:", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                        Text(formatCLP(totalConPropina), fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                    Divider(modifier = Modifier.padding(vertical = 8.dp))
 
-                // Botones según estado
-                if (currentOrder.status == "pending") {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
+                    if (isTerminada) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Subtotal:", fontSize = 16.sp)
+                            Text(formatCLP(currentOrder.total), fontSize = 16.sp)
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("Propina (10%):", fontSize = 16.sp)
+                            Text(formatCLP(propina), fontSize = 16.sp)
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("TOTAL:", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            Text(formatCLP(totalConPropina), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (currentOrder.status == "pending") {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
                                 viewModel.updateOrderStatus(currentOrder.orderId, "in_progress")
                                 viewModel.loadOrders()
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Iniciar") }
-                        OutlinedButton(
-                            onClick = { /* imprimir — pendiente */ },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Print, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Imprimir")
+                            }, modifier = Modifier.weight(1f)) { Text("Iniciar") }
+                            OutlinedButton(onClick = { /* imprimir — pendiente */ }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.Print, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Imprimir")
+                            }
                         }
                     }
-                }
 
-                if (currentOrder.status == "in_progress") {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
+                    if (currentOrder.status == "in_progress") {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(onClick = {
                                 viewModel.updateOrderStatus(currentOrder.orderId, "completed")
                                 viewModel.loadOrders()
                                 onBack()
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) { Text("Terminar") }
-                        OutlinedButton(
-                            onClick = { /* imprimir — pendiente */ },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Print, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Imprimir")
+                            }, modifier = Modifier.weight(1f)) { Text("Terminar") }
+                            OutlinedButton(onClick = { /* imprimir — pendiente */ }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.Print, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Imprimir")
+                            }
                         }
                     }
-                }
 
-                if (currentOrder.status == "completed") {
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { /* imprimir — pendiente */ },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Print, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Imprimir")
-                        }
-                        Button(
-                            onClick = {
+                    if (currentOrder.status == "completed") {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(onClick = { /* imprimir — pendiente */ }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.Print, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Imprimir")
+                            }
+                            Button(onClick = {
                                 viewModel.guardarEnHistorial(currentOrder)
                                 onBack()
-                            },
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Icon(Icons.Default.Save, contentDescription = null)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Guardar")
+                            }, modifier = Modifier.weight(1f)) {
+                                Icon(Icons.Default.Save, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Guardar")
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    // Diálogos en modo edición
+    itemWithOptions?.let { item ->
+        ItemOptionsDialog(
+            item = item,
+            options = ITEM_OPTIONS[item.name] ?: emptyList(),
+            onConfirm = { selectedOptions ->
+                viewModel.addItemToExistingOrder(currentOrder.orderId, item, selectedOptions)
+                itemWithOptions = null
+            },
+            onDismiss = { itemWithOptions = null }
+        )
+    }
+
+    itemWithMenuCompleto?.let { item ->
+        MenuCompletoDialog(
+            item = item,
+            guarniciones = viewModel.guarnicionesDelDia,
+            onConfirm = { notas ->
+                viewModel.addItemToExistingOrder(currentOrder.orderId, item, notas)
+                itemWithMenuCompleto = null
+            },
+            onDismiss = { itemWithMenuCompleto = null }
+        )
+    }
+
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            title = { Text("Eliminar comanda") },
+            text = { Text("¿Confirmas que deseas eliminar la orden #${currentOrder.orderId} de la mesa ${currentOrder.tableNumber}?") },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.updateOrderStatus(currentOrder.orderId, "cancelled")
+                    showDeleteConfirm = false
+                    onBack()
+                }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                    Text("Eliminar")
+                }
+            },
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancelar") } }
+        )
     }
 }
 
@@ -1072,25 +1208,16 @@ fun HistorialScreen(viewModel: RestaurantViewModel) {
                     Text("No hay comandas guardadas hoy", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
-                LazyColumn(
-                    contentPadding = PaddingValues(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
+                LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(viewModel.historial.size) { index ->
                         val entry = viewModel.historial[index]
                         val colorFondo = verdesHistorial[index % verdesHistorial.size]
-                        HistorialCard(entry = entry, colorFondo = colorFondo) {
-                            selectedEntry = entry
-                        }
+                        HistorialCard(entry = entry, colorFondo = colorFondo) { selectedEntry = entry }
                     }
                 }
             }
         } else {
-            HistorialDetail(
-                entry = selectedEntry!!,
-                viewModel = viewModel,
-                onBack = { selectedEntry = null }
-            )
+            HistorialDetail(entry = selectedEntry!!, viewModel = viewModel, onBack = { selectedEntry = null })
         }
     }
 }
@@ -1098,35 +1225,20 @@ fun HistorialScreen(viewModel: RestaurantViewModel) {
 @Composable
 fun HistorialCard(entry: HistorialEntry, colorFondo: Color, onClick: () -> Unit) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = colorFondo)
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text(
-                    text = entry.fechaGuardado,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(text = entry.fechaGuardado, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Text(text = "Mesa ${entry.order.tableNumber}", fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    text = entry.order.items.joinToString(", ") { "${it.quantity}x ${it.name}" },
-                    fontSize = 14.sp
-                )
+                Text(text = entry.order.items.joinToString(", ") { "${it.quantity}x ${it.name}" }, fontSize = 14.sp)
             }
-            Text(
-                text = formatCLP(entry.totalConPropina),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Text(text = formatCLP(entry.totalConPropina), fontSize = 18.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -1139,19 +1251,13 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Volver")
-            }
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Volver") }
             Text("Orden #${entry.order.orderId}", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
 
         Card(modifier = Modifier.padding(16.dp)) {
             Column(modifier = Modifier.padding(16.dp)) {
-                Text(
-                    text = entry.fechaGuardado,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(text = entry.fechaGuardado, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("Mesa ${entry.order.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Text("Estado: Guardada", fontSize = 14.sp)
@@ -1159,12 +1265,8 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
                 Divider(modifier = Modifier.padding(vertical = 16.dp))
 
                 entry.order.items.forEach { item ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
+                    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("${item.quantity}x ${item.name}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         Text(formatCLP(item.subtotal), fontWeight = FontWeight.Bold)
                     }
@@ -1192,10 +1294,7 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = { /* imprimir — pendiente */ },
-                        modifier = Modifier.weight(1f)
-                    ) {
+                    OutlinedButton(onClick = { /* imprimir — pendiente */ }, modifier = Modifier.weight(1f)) {
                         Icon(Icons.Default.Print, contentDescription = null)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Imprimir")
@@ -1241,16 +1340,12 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
                             viewModel.borrarDelHistorial(entry)
                             showDeleteConfirm = false
                             onBack()
-                        } else {
-                            claveError = true
-                        }
+                        } else { claveError = true }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                 ) { Text("Borrar") }
             },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancelar") }
-            }
+            dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancelar") } }
         )
     }
 }
@@ -1264,57 +1359,102 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
 fun ConfigScreen(viewModel: RestaurantViewModel) {
     var claveInput by remember { mutableStateOf(viewModel.claveSeguridad) }
     var claveSaved by remember { mutableStateOf(false) }
+    var guarnicionesInput by remember { mutableStateOf(viewModel.guarnicionesDelDia.joinToString(", ")) }
+    var guarnicionesSaved by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Configuración") })
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        item { TopAppBar(title = { Text("Configuración") }) }
 
-        Card(modifier = Modifier.padding(16.dp)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Servidor API", fontWeight = FontWeight.Bold)
-                Text("Configura la IP del servidor en el código")
-                Text("Ubicación: RestaurantApp() -> API_BASE_URL", fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(onClick = { viewModel.loadMenu() }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Recargar Menú")
-                }
-                Button(onClick = { viewModel.loadOrders() }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Recargar Comandas")
-                }
-            }
-        }
-
-        Card(modifier = Modifier.padding(16.dp)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Clave de seguridad", fontWeight = FontWeight.Bold)
-                Text("Se usa para borrar entradas del historial", fontSize = 12.sp)
-                Spacer(modifier = Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = claveInput,
-                    onValueChange = { claveInput = it; claveSaved = false },
-                    label = { Text("Nueva clave") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        viewModel.claveSeguridad = claveInput
-                        claveSaved = true
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(if (claveSaved) "✓ Clave guardada" else "Guardar clave")
+        item {
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Servidor API", fontWeight = FontWeight.Bold)
+                    Text("Configura la IP del servidor en el código")
+                    Text("Ubicación: RestaurantApp() -> API_BASE_URL", fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Button(onClick = { viewModel.loadMenu() }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Recargar Menú")
+                    }
+                    Button(onClick = { viewModel.loadOrders() }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Recargar Comandas")
+                    }
                 }
             }
         }
 
-        Card(modifier = Modifier.padding(16.dp)) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Text("Estado del sistema", fontWeight = FontWeight.Bold)
-                Text("Items en menú: ${viewModel.menuItems.size}")
-                Text("Mesas: ${viewModel.tables.size}")
-                Text("Comandas activas: ${viewModel.orders.filter { it.status in listOf("pending","in_progress") }.size}")
-                Text("Entradas en historial: ${viewModel.historial.size}")
+        item {
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Guarniciones del día", fontWeight = FontWeight.Bold)
+                    Text("Ingresa las guarniciones separadas por coma.", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Ejemplo: Puré de papas, Arroz, Papas fritas", fontSize = 12.sp,
+                        fontStyle = FontStyle.Italic, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = guarnicionesInput,
+                        onValueChange = { guarnicionesInput = it; guarnicionesSaved = false },
+                        label = { Text("Guarniciones") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            viewModel.guarnicionesDelDia = guarnicionesInput
+                                .split(",")
+                                .map { it.trim() }
+                                .filter { it.isNotBlank() }
+                            guarnicionesSaved = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (guarnicionesSaved) "✓ Guarniciones guardadas" else "Guardar guarniciones")
+                    }
+                    if (viewModel.guarnicionesDelDia.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Activas hoy:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        viewModel.guarnicionesDelDia.forEach { g ->
+                            Text("• $g", fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Clave de seguridad", fontWeight = FontWeight.Bold)
+                    Text("Se usa para borrar entradas del historial", fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = claveInput,
+                        onValueChange = { claveInput = it; claveSaved = false },
+                        label = { Text("Nueva clave") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = { viewModel.claveSeguridad = claveInput; claveSaved = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (claveSaved) "✓ Clave guardada" else "Guardar clave")
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Estado del sistema", fontWeight = FontWeight.Bold)
+                    Text("Items en menú: ${viewModel.menuItems.size}")
+                    Text("Mesas: ${viewModel.tables.size}")
+                    Text("Comandas activas: ${viewModel.orders.filter { it.status in listOf("pending","in_progress") }.size}")
+                    Text("Entradas en historial: ${viewModel.historial.size}")
+                }
             }
         }
     }
