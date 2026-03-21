@@ -438,7 +438,7 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
 val ITEMS_CON_MENU = listOf("Menu normal", "Menu Extra")
 
 // Entradas fijas siempre disponibles
-val ENTRADAS_FIJAS = listOf("Crema de zapallo", "Consomé", "Ensalada")
+val ENTRADAS_FIJAS = listOf("Crema de zapallo", "Consomé", "Ensalada", "Sin entrada")
 
 // ═══════════════════════════════════════════════════════════════
 // SPLASH SCREEN
@@ -646,10 +646,19 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
     var itemWithOptions by remember { mutableStateOf<MenuItem?>(null) }
     var itemWithMenuCompleto by remember { mutableStateOf<MenuItem?>(null) }
 
-    val filteredItems = if (searchQuery.isBlank()) viewModel.menuItems
-    else viewModel.menuItems.filter {
-        it.name.contains(searchQuery, ignoreCase = true) ||
-                it.category.contains(searchQuery, ignoreCase = true)
+    val ITEMS_PRIORITARIOS = listOf("Menu normal", "Menu Extra")
+
+    val filteredItems = run {
+        val base = if (searchQuery.isBlank()) viewModel.menuItems
+        else viewModel.menuItems.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+                    it.category.contains(searchQuery, ignoreCase = true)
+        }
+        val prioritarios = base
+            .filter { it.name in ITEMS_PRIORITARIOS }
+            .sortedBy { ITEMS_PRIORITARIOS.indexOf(it.name) }
+        val resto = base.filter { it.name !in ITEMS_PRIORITARIOS }
+        prioritarios + resto
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -745,6 +754,7 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                             }
                             else -> viewModel.addItemToCurrentOrder(item)
                         }
+
                     }
                 }
             }
@@ -814,6 +824,24 @@ fun MenuItemCard(item: MenuItem, onClick: () -> Unit) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = item.name, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+
+
+// Etiqueta visual para ítems prioritarios
+                if (item.name in listOf("Menu normal", "Menu Extra")) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            "⭐ Más pedido",
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
                 if (item.description.isNotEmpty()) {
                     Text(text = item.description, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -900,7 +928,11 @@ fun OrderCard(order: Order, showPrice: Boolean = false, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text(text = "Mesa ${order.tableNumber}", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (order.tableNumber == "Para llevar") "Para llevar" else "Mesa ${order.tableNumber}",
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold
+                )
                 Text(text = order.items.joinToString(", ") { "${it.quantity}x ${it.name}" }, fontSize = 16.sp)
                 Text(text = order.createdAt, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -1042,7 +1074,10 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             // ── MODO VISTA NORMAL ──
             Card(modifier = Modifier.padding(16.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("Mesa ${currentOrder.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        text = if (currentOrder.tableNumber == "Para llevar") "Para llevar" else "Mesa ${currentOrder.tableNumber}",
+                        fontSize = 24.sp, fontWeight = FontWeight.Bold
+                    )
                     Text("Estado: ${when(currentOrder.status) {
                         "pending" -> "Pendiente"
                         "in_progress" -> "En preparación"
@@ -1235,7 +1270,10 @@ fun HistorialCard(entry: HistorialEntry, colorFondo: Color, onClick: () -> Unit)
         ) {
             Column {
                 Text(text = entry.fechaGuardado, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Text(text = "Mesa ${entry.order.tableNumber}", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (entry.order.tableNumber == "Para llevar") "Para llevar" else "Mesa ${entry.order.tableNumber}",
+                    fontSize = 15.sp, fontWeight = FontWeight.Bold
+                )
                 Text(text = entry.order.items.joinToString(", ") { "${it.quantity}x ${it.name}" }, fontSize = 14.sp)
             }
             Text(text = formatCLP(entry.totalConPropina), fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -1259,7 +1297,10 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(text = entry.fechaGuardado, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text("Mesa ${entry.order.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (entry.order.tableNumber == "Para llevar") "Para llevar" else "Mesa ${entry.order.tableNumber}",
+                    fontSize = 24.sp, fontWeight = FontWeight.Bold
+                )
                 Text("Estado: Guardada", fontSize = 14.sp)
 
                 Divider(modifier = Modifier.padding(vertical = 16.dp))
