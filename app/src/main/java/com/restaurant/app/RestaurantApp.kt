@@ -7,12 +7,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -438,7 +436,7 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
 val ITEMS_CON_MENU = listOf("Menu normal", "Menu Extra")
 
 // Entradas fijas siempre disponibles
-val ENTRADAS_FIJAS = listOf("Crema de zapallo", "Consomé", "Ensalada", "Sin entrada")
+val ENTRADAS_FIJAS = listOf("Crema de zapallo", "Consomé", "Ensalada")
 
 // ═══════════════════════════════════════════════════════════════
 // SPLASH SCREEN
@@ -491,7 +489,7 @@ fun RestaurantApp() {
             NavigationBar {
                 NavigationBarItem(icon = { Icon(Icons.Default.Restaurant, null) }, label = { Text("Menú") },
                     selected = currentScreen == "menu", onClick = { currentScreen = "menu" })
-                NavigationBarItem(icon = { Icon(Icons.Default.ListAlt, null) }, label = { Text("Comandas") },
+                NavigationBarItem(icon = { Icon(Icons.AutoMirrored.Filled.ListAlt, null) }, label = { Text("Comandas") },
                     selected = currentScreen == "orders", onClick = { currentScreen = "orders" })
                 NavigationBarItem(icon = { Icon(Icons.Default.History, null) }, label = { Text("Historial") },
                     selected = currentScreen == "historial", onClick = { currentScreen = "historial" })
@@ -598,7 +596,7 @@ fun MenuCompletoDialog(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text("Guarnición:", fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -646,19 +644,10 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
     var itemWithOptions by remember { mutableStateOf<MenuItem?>(null) }
     var itemWithMenuCompleto by remember { mutableStateOf<MenuItem?>(null) }
 
-    val ITEMS_PRIORITARIOS = listOf("Menu normal", "Menu Extra")
-
-    val filteredItems = run {
-        val base = if (searchQuery.isBlank()) viewModel.menuItems
-        else viewModel.menuItems.filter {
-            it.name.contains(searchQuery, ignoreCase = true) ||
-                    it.category.contains(searchQuery, ignoreCase = true)
-        }
-        val prioritarios = base
-            .filter { it.name in ITEMS_PRIORITARIOS }
-            .sortedBy { ITEMS_PRIORITARIOS.indexOf(it.name) }
-        val resto = base.filter { it.name !in ITEMS_PRIORITARIOS }
-        prioritarios + resto
+    val filteredItems = if (searchQuery.isBlank()) viewModel.menuItems
+    else viewModel.menuItems.filter {
+        it.name.contains(searchQuery, ignoreCase = true) ||
+                it.category.contains(searchQuery, ignoreCase = true)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -754,7 +743,6 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                             }
                             else -> viewModel.addItemToCurrentOrder(item)
                         }
-
                     }
                 }
             }
@@ -824,24 +812,6 @@ fun MenuItemCard(item: MenuItem, onClick: () -> Unit) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = item.name, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-
-
-// Etiqueta visual para ítems prioritarios
-                if (item.name in listOf("Menu normal", "Menu Extra")) {
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Text(
-                            "⭐ Más pedido",
-                            fontSize = 10.sp,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
                 if (item.description.isNotEmpty()) {
                     Text(text = item.description, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -928,11 +898,7 @@ fun OrderCard(order: Order, showPrice: Boolean = false, onClick: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
-                Text(
-                    text = if (order.tableNumber == "Para llevar") "Para llevar" else "Mesa ${order.tableNumber}",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(text = "Mesa ${order.tableNumber}", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 Text(text = order.items.joinToString(", ") { "${it.quantity}x ${it.name}" }, fontSize = 16.sp)
                 Text(text = order.createdAt, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -963,7 +929,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
     Column(modifier = Modifier.fillMaxSize()) {
         Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Volver")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
             }
             Text("Orden #${currentOrder.orderId}", fontSize = 20.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f))
@@ -1074,10 +1040,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             // ── MODO VISTA NORMAL ──
             Card(modifier = Modifier.padding(16.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = if (currentOrder.tableNumber == "Para llevar") "Para llevar" else "Mesa ${currentOrder.tableNumber}",
-                        fontSize = 24.sp, fontWeight = FontWeight.Bold
-                    )
+                    Text("Mesa ${currentOrder.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                     Text("Estado: ${when(currentOrder.status) {
                         "pending" -> "Pendiente"
                         "in_progress" -> "En preparación"
@@ -1087,7 +1050,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                     }}")
                     Text("Hora: ${currentOrder.createdAt}", fontSize = 14.sp)
 
-                    Divider(modifier = Modifier.padding(vertical = 16.dp))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
                     currentOrder.items.forEach { item ->
                         Row(
@@ -1107,7 +1070,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                         }
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 8.dp))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                     if (isTerminada) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1120,7 +1083,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                             Text(formatCLP(propina), fontSize = 16.sp)
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        Divider()
+                        HorizontalDivider()
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("TOTAL:", fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -1270,10 +1233,7 @@ fun HistorialCard(entry: HistorialEntry, colorFondo: Color, onClick: () -> Unit)
         ) {
             Column {
                 Text(text = entry.fechaGuardado, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                Text(
-                    text = if (entry.order.tableNumber == "Para llevar") "Para llevar" else "Mesa ${entry.order.tableNumber}",
-                    fontSize = 15.sp, fontWeight = FontWeight.Bold
-                )
+                Text(text = "Mesa ${entry.order.tableNumber}", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 Text(text = entry.order.items.joinToString(", ") { "${it.quantity}x ${it.name}" }, fontSize = 14.sp)
             }
             Text(text = formatCLP(entry.totalConPropina), fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -1289,7 +1249,7 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Volver") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver") }
             Text("Orden #${entry.order.orderId}", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
 
@@ -1297,13 +1257,10 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(text = entry.fechaGuardado, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = if (entry.order.tableNumber == "Para llevar") "Para llevar" else "Mesa ${entry.order.tableNumber}",
-                    fontSize = 24.sp, fontWeight = FontWeight.Bold
-                )
+                Text("Mesa ${entry.order.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Text("Estado: Guardada", fontSize = 14.sp)
 
-                Divider(modifier = Modifier.padding(vertical = 16.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
                 entry.order.items.forEach { item ->
                     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -1313,7 +1270,7 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
                     }
                 }
 
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Subtotal:", fontSize = 16.sp)
@@ -1325,7 +1282,7 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
                     Text(formatCLP(entry.propina), fontSize = 16.sp)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("TOTAL:", fontSize = 20.sp, fontWeight = FontWeight.Bold)
