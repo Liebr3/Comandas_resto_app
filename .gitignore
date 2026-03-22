@@ -1,0 +1,44 @@
+# Build
+/build
+/app/build
+**/*.apk
+**/*.aab
+**/*.ap_
+
+# Gradle
+.gradle/
+gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Local
+local.properties
+keystore.properties
+*.jks
+*.keystore
+
+# Kotlin / Java compilados
+*.class
+
+# Archivos en raíz que no pertenecen al proyecto
+/*.xml
+/index.html
+/script.js
+/styles.css
+/build_output.txt
+/unused.xml
+/warnings.txt
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
