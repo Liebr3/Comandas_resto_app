@@ -7,12 +7,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ListAlt
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -491,7 +489,7 @@ fun RestaurantApp() {
             NavigationBar {
                 NavigationBarItem(icon = { Icon(Icons.Default.Restaurant, null) }, label = { Text("Menú") },
                     selected = currentScreen == "menu", onClick = { currentScreen = "menu" })
-                NavigationBarItem(icon = { Icon(Icons.Default.ListAlt, null) }, label = { Text("Comandas") },
+                NavigationBarItem(icon = { Icon(Icons.AutoMirrored.Filled.ListAlt, null) }, label = { Text("Comandas") },
                     selected = currentScreen == "orders", onClick = { currentScreen = "orders" })
                 NavigationBarItem(icon = { Icon(Icons.Default.History, null) }, label = { Text("Historial") },
                     selected = currentScreen == "historial", onClick = { currentScreen = "historial" })
@@ -598,7 +596,7 @@ fun MenuCompletoDialog(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text("Guarnición:", fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -931,7 +929,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
     Column(modifier = Modifier.fillMaxSize()) {
         Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "Volver")
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
             }
             Text("Orden #${currentOrder.orderId}", fontSize = 20.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f))
@@ -1052,7 +1050,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                     }}")
                     Text("Hora: ${currentOrder.createdAt}", fontSize = 14.sp)
 
-                    Divider(modifier = Modifier.padding(vertical = 16.dp))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
                     currentOrder.items.forEach { item ->
                         Row(
@@ -1072,7 +1070,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                         }
                     }
 
-                    Divider(modifier = Modifier.padding(vertical = 8.dp))
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                     if (isTerminada) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -1085,7 +1083,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                             Text(formatCLP(propina), fontSize = 16.sp)
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        Divider()
+                        HorizontalDivider()
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("TOTAL:", fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -1251,7 +1249,7 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = "Volver") }
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver") }
             Text("Orden #${entry.order.orderId}", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
 
@@ -1262,7 +1260,7 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
                 Text("Mesa ${entry.order.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                 Text("Estado: Guardada", fontSize = 14.sp)
 
-                Divider(modifier = Modifier.padding(vertical = 16.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
                 entry.order.items.forEach { item ->
                     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -1272,7 +1270,7 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
                     }
                 }
 
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Subtotal:", fontSize = 16.sp)
@@ -1284,7 +1282,7 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
                     Text(formatCLP(entry.propina), fontSize = 16.sp)
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("TOTAL:", fontSize = 20.sp, fontWeight = FontWeight.Bold)
