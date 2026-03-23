@@ -8,6 +8,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ListAlt
@@ -291,6 +294,9 @@ class RestaurantViewModel(private val apiClient: ApiClient) : ViewModel() {
     // Guarniciones configurables del día
     var guarnicionesDelDia by mutableStateOf(listOf<String>())
 
+    // Platos configurables del día
+    var platosDelDia by mutableStateOf(listOf<String>())
+
     var currentOrder by mutableStateOf(listOf<OrderItem>())
     var selectedTable by mutableStateOf<Table?>(null)
 
@@ -568,10 +574,12 @@ fun ItemOptionsDialog(
 @Composable
 fun MenuCompletoDialog(
     item: MenuItem,
+    platos: List<String>,
     guarniciones: List<String>,
     onConfirm: (notas: String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val platoSeleccionado = remember { mutableStateOf<String?>(null) }
     val entradaSeleccionada = remember { mutableStateOf<String?>(null) }
     val guarnicionSeleccionada = remember { mutableStateOf<String?>(null) }
 
@@ -579,7 +587,32 @@ fun MenuCompletoDialog(
         onDismissRequest = onDismiss,
         title = { Text(item.name, fontWeight = FontWeight.Bold) },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text("Plato:", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                if (platos.isEmpty()) {
+                    Text("No hay platos configurados para hoy.", fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontStyle = FontStyle.Italic)
+                } else {
+                    platos.forEach { plato ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                platoSeleccionado.value = plato
+                            }.padding(vertical = 2.dp)
+                        ) {
+                            RadioButton(selected = platoSeleccionado.value == plato,
+                                onClick = { platoSeleccionado.value = plato })
+                            Text(plato, modifier = Modifier.padding(start = 4.dp))
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Text("Entrada:", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 Spacer(modifier = Modifier.height(4.dp))
                 ENTRADAS_FIJAS.forEach { entrada ->
@@ -623,6 +656,7 @@ fun MenuCompletoDialog(
         confirmButton = {
             Button(onClick = {
                 val partes = mutableListOf<String>()
+                platoSeleccionado.value?.let { partes.add("Plato: $it") }
                 entradaSeleccionada.value?.let { partes.add("Entrada: $it") }
                 guarnicionSeleccionada.value?.let { partes.add("Guarnición: $it") }
                 onConfirm(partes.joinToString(" | "))
@@ -644,13 +678,22 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
     var itemWithOptions by remember { mutableStateOf<MenuItem?>(null) }
     var itemWithMenuCompleto by remember { mutableStateOf<MenuItem?>(null) }
 
-    val filteredItems = if (searchQuery.isBlank()) viewModel.menuItems
-    else viewModel.menuItems.filter {
-        it.name.contains(searchQuery, ignoreCase = true) ||
-                it.category.contains(searchQuery, ignoreCase = true)
+    val ITEMS_PRIORITARIOS = listOf("Menu normal", "Menu Extra")
+
+    val filteredItems = run {
+        val base = if (searchQuery.isBlank()) viewModel.menuItems
+        else viewModel.menuItems.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+                    it.category.contains(searchQuery, ignoreCase = true)
+        }
+        val prioritarios = base
+            .filter { it.name in ITEMS_PRIORITARIOS }
+            .sortedBy { ITEMS_PRIORITARIOS.indexOf(it.name) }
+        val resto = base.filter { it.name !in ITEMS_PRIORITARIOS }
+        prioritarios + resto
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().imePadding()) {
         TopAppBar(
             title = { Text("Menú del Restaurante") },
             actions = {
@@ -677,8 +720,12 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
         )
 
         if (viewModel.currentOrder.isNotEmpty()) {
-            Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
-                Column(modifier = Modifier.padding(8.dp)) {
+            Card(modifier = Modifier.fillMaxWidth().padding(8.dp).heightIn(max = 200.dp)) {
+                Column(
+                    modifier = Modifier
+                        .padding(8.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
                     Text("Comanda actual:", fontWeight = FontWeight.Bold)
                     viewModel.currentOrder.forEach { orderItem ->
                         Row(
@@ -726,7 +773,11 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
 
         val itemsByCategory = filteredItems.groupBy { it.category }
 
-        LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
             itemsByCategory.forEach { (category, _) ->
                 item {
                     Text(text = category, fontSize = 20.sp, fontWeight = FontWeight.Bold,
@@ -764,6 +815,7 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
     itemWithMenuCompleto?.let { item ->
         MenuCompletoDialog(
             item = item,
+            platos = viewModel.platosDelDia,
             guarniciones = viewModel.guarnicionesDelDia,
             onConfirm = { notas ->
                 viewModel.addItemToCurrentOrder(item, notas)
@@ -812,6 +864,21 @@ fun MenuItemCard(item: MenuItem, onClick: () -> Unit) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(text = item.name, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                if (item.name in listOf("Menu normal", "Menu Extra")) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            "⭐ Más pedido",
+                            fontSize = 10.sp,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
                 if (item.description.isNotEmpty()) {
                     Text(text = item.description, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -1160,6 +1227,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
     itemWithMenuCompleto?.let { item ->
         MenuCompletoDialog(
             item = item,
+            platos = viewModel.platosDelDia,
             guarniciones = viewModel.guarnicionesDelDia,
             onConfirm = { notas ->
                 viewModel.addItemToExistingOrder(currentOrder.orderId, item, notas)
@@ -1359,6 +1427,8 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
     var claveSaved by remember { mutableStateOf(false) }
     var guarnicionesInput by remember { mutableStateOf(viewModel.guarnicionesDelDia.joinToString(", ")) }
     var guarnicionesSaved by remember { mutableStateOf(false) }
+    var platosInput by remember { mutableStateOf(viewModel.platosDelDia.joinToString(", ")) }
+    var platosSaved by remember { mutableStateOf(false) }
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { TopAppBar(title = { Text("Configuración") }) }
@@ -1375,6 +1445,45 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
                     }
                     Button(onClick = { viewModel.loadOrders() }, modifier = Modifier.fillMaxWidth()) {
                         Text("Recargar Comandas")
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Platos del día", fontWeight = FontWeight.Bold)
+                    Text("Ingresa hasta 4 platos separados por coma.", fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = platosInput,
+                        onValueChange = { platosInput = it; platosSaved = false },
+                        label = { Text("Platos") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            viewModel.platosDelDia = platosInput
+                                .split(",")
+                                .map { it.trim() }
+                                .filter { it.isNotBlank() }
+                                .take(4)
+                            platosSaved = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (platosSaved) "✓ Platos guardados" else "Guardar platos")
+                    }
+                    if (viewModel.platosDelDia.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Activos hoy:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        viewModel.platosDelDia.forEach { p ->
+                            Text("• $p", fontSize = 13.sp)
+                        }
                     }
                 }
             }
