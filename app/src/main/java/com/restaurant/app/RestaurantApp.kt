@@ -721,52 +721,64 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
 
         if (viewModel.currentOrder.isNotEmpty()) {
             Card(modifier = Modifier.fillMaxWidth().padding(8.dp).heightIn(max = 200.dp)) {
-                Column(
-                    modifier = Modifier
-                        .padding(8.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text("Comanda actual:", fontWeight = FontWeight.Bold)
-                    viewModel.currentOrder.forEach { orderItem ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row {
-                                    Text("${orderItem.quantity}x ${orderItem.menuItem.name}")
-                                    if (orderItem.notes.isNotEmpty()) {
-                                        Text(" (${orderItem.notes})", fontSize = 12.sp,
-                                            fontStyle = FontStyle.Italic,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Box {
+                    Column(
+                        modifier = Modifier
+                            .padding(8.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text("Comanda actual:", fontWeight = FontWeight.Bold)
+                        viewModel.currentOrder.forEach { orderItem ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row {
+                                        Text("${orderItem.quantity}x ${orderItem.menuItem.name}")
+                                        if (orderItem.notes.isNotEmpty()) {
+                                            Text(" (${orderItem.notes})", fontSize = 12.sp,
+                                                fontStyle = FontStyle.Italic,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
                                     }
                                 }
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconButton(onClick = { viewModel.removeItemFromCurrentOrder(orderItem.menuItem, orderItem.notes) }) {
-                                    Icon(Icons.Default.Remove, contentDescription = "Quitar uno")
-                                }
-                                IconButton(onClick = { viewModel.addItemToCurrentOrder(orderItem.menuItem, orderItem.notes) }) {
-                                    Icon(Icons.Default.Add, contentDescription = "Agregar uno")
-                                }
-                                IconButton(onClick = {
-                                    viewModel.currentOrder = viewModel.currentOrder.filter {
-                                        !(it.menuItem.id == orderItem.menuItem.id && it.notes == orderItem.notes)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(onClick = { viewModel.removeItemFromCurrentOrder(orderItem.menuItem, orderItem.notes) }) {
+                                        Icon(Icons.Default.Remove, contentDescription = "Quitar uno")
                                     }
-                                }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Eliminar",
-                                        tint = MaterialTheme.colorScheme.error)
+                                    IconButton(onClick = { viewModel.addItemToCurrentOrder(orderItem.menuItem, orderItem.notes) }) {
+                                        Icon(Icons.Default.Add, contentDescription = "Agregar uno")
+                                    }
+                                    IconButton(onClick = {
+                                        viewModel.currentOrder = viewModel.currentOrder.filter {
+                                            !(it.menuItem.id == orderItem.menuItem.id && it.notes == orderItem.notes)
+                                        }
+                                    }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Eliminar",
+                                            tint = MaterialTheme.colorScheme.error)
+                                    }
                                 }
                             }
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        val total = viewModel.currentOrder.sumOf { it.quantity * it.menuItem.price }
+                        Text("Total: ${formatCLP(total)}", fontWeight = FontWeight.Bold)
+                        Button(onClick = { showTableSelector = true }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Asignar a mesa")}
                     }
-                    Spacer(modifier = Modifier.height(8.dp))
-                    val total = viewModel.currentOrder.sumOf { it.quantity * it.menuItem.price }
-                    Text("Total: ${formatCLP(total)}", fontWeight = FontWeight.Bold)
-                    Button(onClick = { showTableSelector = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Asignar a mesa")
-                    }
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(24.dp)
+                            .align(Alignment.BottomCenter)
+                            .background(
+                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color.Gray.copy(alpha = 0.3f))
+                                )
+                            )
+                    ) // cierra Box degradé
                 }
             }
         }
@@ -836,9 +848,18 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                             modifier = Modifier.fillMaxWidth().padding(4.dp).clickable {
                                 viewModel.saveOrder(table)
                                 showTableSelector = false
-                            }
+                            },
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                            )
                         ) {
-                            Text("Mesa ${table.name} (${table.capacity} personas)", modifier = Modifier.padding(16.dp))
+                            Text(
+                                text = if (table.name == "Para llevar") "Para llevar" else "Mesa ${table.name}",
+                                modifier = Modifier.padding(16.dp),
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
                         }
                     }
                 }
