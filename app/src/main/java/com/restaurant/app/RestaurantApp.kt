@@ -230,6 +230,33 @@ class ApiClient(private val baseUrl: String) {
         json.getString("message")
     }
 
+    suspend fun assignTableAndStart(orderId: Int, tableId: Int): Result<String> = runCatching {
+        val url = URL("$baseUrl/orders/$orderId")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "PATCH"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setRequestProperty("X-HTTP-Method-Override", "PATCH")
+        connection.doOutput = true
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+        val body = JSONObject()
+        body.put("status", "in_progress")
+        body.put("table_id", tableId)
+        connection.outputStream.use { os ->
+            os.write(body.toString().toByteArray(Charsets.UTF_8))
+            os.flush()
+        }
+        val responseCode = connection.responseCode
+        val response = if (responseCode >= 400) {
+            connection.errorStream.bufferedReader().readText()
+        } else {
+            connection.inputStream.bufferedReader().readText()
+        }
+        connection.disconnect()
+        val json = JSONObject(response)
+        json.optString("message", json.optString("error", "Sin respuesta"))
+    }
+
     suspend fun addItemToOrder(orderId: Int, menuItemId: Int, quantity: Int, notes: String): Result<String> = runCatching {
         val url = URL("$baseUrl/orders/$orderId/items")
         val connection = url.openConnection() as HttpURLConnection
@@ -398,6 +425,14 @@ class RestaurantViewModel(private val apiClient: ApiClient) : ViewModel() {
             apiClient.updateOrderStatus(orderId, status)
                 .onSuccess { loadOrders() }
                 .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al actualizar: ${error.message}" } }
+        }
+    }
+
+    fun assignTableAndStart(orderId: Int, tableId: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            apiClient.assignTableAndStart(orderId, tableId)
+                .onSuccess { loadOrders() }
+                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al asignar mesa: ${error.message}" } }
         }
     }
 
@@ -1326,16 +1361,63 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                     Spacer(modifier = Modifier.height(16.dp))
 
                     if (currentOrder.status == "pending") {
+                        var showAsignarMesa by remember { mutableStateOf(false) }
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(onClick = {
-                                viewModel.updateOrderStatus(currentOrder.orderId, "in_progress")
-                                viewModel.loadOrders()
+                                if (currentOrder.tableNumber == "Reserva") {
+                                    showAsignarMesa = true
+                                } else {
+                                    viewModel.updateOrderStatus(currentOrder.orderId, "in_progress")
+                                    viewModel.loadOrders()
+                                }
                             }, modifier = Modifier.weight(1f)) { Text("Iniciar") }
                             OutlinedButton(onClick = { /* imprimir — pendiente */ }, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Default.Print, contentDescription = null)
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Imprimir")
                             }
+                        }
+                        if (showAsignarMesa) {
+                            AlertDialog(
+                                onDismissRequest = { showAsignarMesa = false },
+                                title = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text("Asignar mesa")
+                                        IconButton(onClick = { viewModel.loadTables() }) {
+                                            Icon(Icons.Default.Refresh, contentDescription = "Recargar")
+                                        }
+                                    }
+                                },
+                                text = {
+                                    LazyColumn {
+                                        items(viewModel.tables.filter { it.name != "Reserva" }) { table ->
+                                            Card(
+                                                modifier = Modifier.fillMaxWidth().padding(4.dp).clickable {
+                                                    viewModel.assignTableAndStart(currentOrder.orderId, table.id)
+                                                    showAsignarMesa = false
+                                                    onBack()
+                                                },
+                                                colors = CardDefaults.cardColors(
+                                                    containerColor = MaterialTheme.colorScheme.primaryContainer
+                                                )
+                                            ) {
+                                                Text(
+                                                    text = if (table.name == "Para llevar") "Para llevar" else "Mesa ${table.name}",
+                                                    modifier = Modifier.padding(16.dp),
+                                                    fontSize = 18.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
+                                confirmButton = { TextButton(onClick = { showAsignarMesa = false }) { Text("Cancelar") } }
+                            )
                         }
                     }
 
