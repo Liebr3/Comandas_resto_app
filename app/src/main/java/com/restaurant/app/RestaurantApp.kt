@@ -376,6 +376,23 @@ class RestaurantViewModel(private val apiClient: ApiClient) : ViewModel() {
         }
     }
 
+    fun saveOrderWithNotes(table: Table, reservaNotas: String) {
+        if (currentOrder.isEmpty()) return
+        val orderConNotas = currentOrder.map {
+            it.copy(notes = if (it.notes.isBlank()) reservaNotas else "${it.notes} | $reservaNotas")
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) { isLoading = true; errorMessage = null }
+            apiClient.createOrder(table.id, orderConNotas)
+                .onSuccess {
+                    withContext(Dispatchers.Main) { currentOrder = listOf(); selectedTable = null }
+                    loadOrders()
+                }
+                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al crear reserva: ${error.message}" } }
+            withContext(Dispatchers.Main) { isLoading = false }
+        }
+    }
+
     fun updateOrderStatus(orderId: Int, status: String) {
         viewModelScope.launch(Dispatchers.IO) {
             apiClient.updateOrderStatus(orderId, status)
@@ -667,6 +684,74 @@ fun MenuCompletoDialog(
 }
 
 // ═══════════════════════════════════════════════════════════════
+// DIÁLOGO RESERVA
+// ═══════════════════════════════════════════════════════════════
+
+@Composable
+fun ReservaDialog(
+    onConfirm: (notasReserva: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var hora by remember { mutableStateOf("") }
+    var personas by remember { mutableStateOf("") }
+    var nombre by remember { mutableStateOf("") }
+    var notas by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Datos de la reserva", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = hora,
+                    onValueChange = { hora = it },
+                    label = { Text("Hora de reserva") },
+                    placeholder = { Text("Ej: 20:30") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = personas,
+                    onValueChange = { personas = it },
+                    label = { Text("Cantidad de personas") },
+                    placeholder = { Text("Ej: 4") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = nombre,
+                    onValueChange = { nombre = it },
+                    label = { Text("Nombre de quien reserva") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = notas,
+                    onValueChange = { notas = it },
+                    label = { Text("Notas para cocina (opcional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val partes = mutableListOf<String>()
+                if (hora.isNotBlank()) partes.add("Hora: $hora")
+                if (personas.isNotBlank()) partes.add("Personas: $personas")
+                if (nombre.isNotBlank()) partes.add("Reserva: $nombre")
+                if (notas.isNotBlank()) partes.add("Notas: $notas")
+                onConfirm(partes.joinToString(" | "))
+            }) { Text("Confirmar") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════
 // PANTALLA MENÚ
 // ═══════════════════════════════════════════════════════════════
 
@@ -677,6 +762,7 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
     var searchQuery by remember { mutableStateOf("") }
     var itemWithOptions by remember { mutableStateOf<MenuItem?>(null) }
     var itemWithMenuCompleto by remember { mutableStateOf<MenuItem?>(null) }
+    var tableParaReserva by remember { mutableStateOf<Table?>(null) }
 
     val ITEMS_PRIORITARIOS = listOf("Menu normal", "Menu Extra")
 
@@ -840,31 +926,77 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
     if (showTableSelector) {
         AlertDialog(
             onDismissRequest = { showTableSelector = false },
-            title = { Text("Seleccionar mesa") },
+            title = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Seleccionar mesa")
+                    IconButton(onClick = { viewModel.loadTables() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Recargar mesas")
+                    }
+                }
+            },
             text = {
-                LazyColumn {
-                    items(viewModel.tables) { table ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth().padding(4.dp).clickable {
-                                viewModel.saveOrder(table)
-                                showTableSelector = false
-                            },
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer
-                            )
-                        ) {
-                            Text(
-                                text = if (table.name == "Para llevar") "Para llevar" else "Mesa ${table.name}",
-                                modifier = Modifier.padding(16.dp),
-                                fontSize = 18.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                if (viewModel.tables.isEmpty()) {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("Sin mesas disponibles. Recarga con ↻",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LazyColumn {
+                        items(viewModel.tables.sortedWith(compareBy { if (it.name == "Reserva") 0 else 1 })) { table ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth().padding(4.dp).clickable {
+                                    if (table.name == "Reserva") {
+                                        tableParaReserva = table
+                                        showTableSelector = false
+                                    } else {
+                                        viewModel.saveOrder(table)
+                                        showTableSelector = false
+                                    }
+                                },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (table.name == "Reserva")
+                                        MaterialTheme.colorScheme.tertiaryContainer
+                                    else
+                                        MaterialTheme.colorScheme.primaryContainer
+                                )
+                            ) {
+                                Text(
+                                    text = when (table.name) {
+                                        "Para llevar" -> "Para llevar"
+                                        "Reserva" -> "📋 Reserva"
+                                        else -> "Mesa ${table.name}"
+                                    },
+                                    modifier = Modifier.padding(16.dp),
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (table.name == "Reserva")
+                                        MaterialTheme.colorScheme.onTertiaryContainer
+                                    else
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                         }
                     }
                 }
             },
             confirmButton = { TextButton(onClick = { showTableSelector = false }) { Text("Cancelar") } }
+        )
+    }
+
+    tableParaReserva?.let { table ->
+        ReservaDialog(
+            onConfirm = { notasReserva ->
+                viewModel.saveOrderWithNotes(table, notasReserva)
+                tableParaReserva = null
+            },
+            onDismiss = { tableParaReserva = null }
         )
     }
 }
@@ -920,7 +1052,8 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
     var selectedOrder by remember { mutableStateOf<Order?>(null) }
     var selectedTab by remember { mutableStateOf(0) }
 
-    val activeOrders = viewModel.orders.filter { it.status in listOf("pending", "in_progress") }
+    val activeOrders = viewModel.orders.filter { it.status in listOf("pending", "in_progress") && it.tableNumber != "Reserva" }
+    val reservaOrders = viewModel.orders.filter { it.tableNumber == "Reserva" && it.status in listOf("pending", "in_progress") }
     val terminatedOrders = viewModel.orders.filter { it.status == "completed" }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -937,23 +1070,33 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
             Tab(selected = selectedTab == 0, onClick = { selectedTab = 0; selectedOrder = null },
                 text = { Text("Activas (${activeOrders.size})") })
             Tab(selected = selectedTab == 1, onClick = { selectedTab = 1; selectedOrder = null },
+                text = { Text("Reservas (${reservaOrders.size})") })
+            Tab(selected = selectedTab == 2, onClick = { selectedTab = 2; selectedOrder = null },
                 text = { Text("Terminadas (${terminatedOrders.size})") })
         }
 
-        val ordersToShow = if (selectedTab == 0) activeOrders else terminatedOrders
+        val ordersToShow = when (selectedTab) {
+            0 -> activeOrders
+            1 -> reservaOrders
+            else -> terminatedOrders
+        }
 
         if (selectedOrder == null) {
             if (ordersToShow.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = if (selectedTab == 0) "No hay comandas activas" else "No hay comandas terminadas hoy",
+                        text = when (selectedTab) {
+                            0 -> "No hay comandas activas"
+                            1 -> "No hay reservas activas"
+                            else -> "No hay comandas terminadas hoy"
+                        },
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             } else {
                 LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(ordersToShow) { order ->
-                        OrderCard(order, showPrice = selectedTab == 1) { selectedOrder = order }
+                        OrderCard(order, showPrice = selectedTab == 2) { selectedOrder = order }
                     }
                 }
             }
@@ -961,7 +1104,7 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
             OrderDetail(
                 order = selectedOrder!!,
                 viewModel = viewModel,
-                isTerminada = selectedTab == 1,
+                isTerminada = selectedTab == 2,
                 onBack = { selectedOrder = null }
             )
         }
