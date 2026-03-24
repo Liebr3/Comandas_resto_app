@@ -508,6 +508,7 @@ fun RestaurantApp() {
     var currentScreen by remember { mutableStateOf("menu") }
 
     Scaffold(
+        modifier = Modifier.imePadding(),
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(icon = { Icon(Icons.Default.Restaurant, null) }, label = { Text("Menú") },
