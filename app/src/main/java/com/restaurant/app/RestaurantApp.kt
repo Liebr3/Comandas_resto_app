@@ -320,7 +320,7 @@ class ApiClient(private val baseUrl: String) {
         json.optString("message", json.optString("error", "Sin respuesta"))
     }
 
-    suspend fun printOrder(orderId: Int, restaurantName: String, footerText: String): Result<String> = runCatching {
+    suspend fun printOrder(orderId: Int, orderStatus: String, restaurantName: String, footerText: String): Result<String> = runCatching {
         val url = URL("$baseUrl/orders/$orderId/print")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
@@ -331,6 +331,7 @@ class ApiClient(private val baseUrl: String) {
         val body = JSONObject()
         body.put("restaurant_name", restaurantName)
         body.put("footer_text", footerText)
+        body.put("for_kitchen", orderStatus in listOf("pending", "in_progress"))
         connection.outputStream.use { os ->
             os.write(body.toString().toByteArray(Charsets.UTF_8))
             os.flush()
@@ -551,7 +552,7 @@ class RestaurantViewModel(
 
     fun printOrder(order: Order) {
         viewModelScope.launch(Dispatchers.IO) {
-            apiClient.printOrder(order.orderId, restaurantName, footerText)
+            apiClient.printOrder(order.orderId, order.status, restaurantName, footerText)
                 .onFailure { error ->
                     withContext(Dispatchers.Main) {
                         errorMessage = "Error al imprimir: ${error.message}"
@@ -1401,7 +1402,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
         } else {
             // ── MODO VISTA NORMAL ──
             Card(modifier = Modifier.padding(16.dp)) {
-                Column(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
                     Text("Mesa ${currentOrder.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
                     Text("Estado: ${when(currentOrder.status) {
                         "pending" -> "Pendiente"
