@@ -541,7 +541,7 @@ class RestaurantViewModel(
         val totalConPropina = order.total + propina
         val ahora = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
             .format(java.util.Date())
-        val entry = HistorialEntry(order = order, propina = propina, totalConPropina = totalConPropina, fechaGuardado = ahora)
+        val entry = HistorialEntry(order = order.copy(status = "completed"), propina = propina, totalConPropina = totalConPropina, fechaGuardado = ahora)
         historial = listOf(entry) + historial
         updateOrderStatus(order.orderId, "cancelled")
     }
