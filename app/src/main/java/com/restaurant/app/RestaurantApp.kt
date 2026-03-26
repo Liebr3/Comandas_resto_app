@@ -1,6 +1,14 @@
 package com.restaurant.app
 
 import android.os.Bundle
+import android.content.Context
+import androidx.compose.ui.platform.LocalContext
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.first
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -33,6 +41,17 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+
+// ═══════════════════════════════════════════════════════════════
+// DATASTORE — PERSISTENCIA LOCAL
+// ═══════════════════════════════════════════════════════════════
+
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "restaurant_prefs")
+
+object PrefKeys {
+    val PLATOS_DEL_DIA       = stringPreferencesKey("platos_del_dia")
+    val GUARNICIONES_DEL_DIA = stringPreferencesKey("guarniciones_del_dia")
+}
 
 // ═══════════════════════════════════════════════════════════════
 // MODELOS DE DATOS
@@ -300,13 +319,42 @@ class ApiClient(private val baseUrl: String) {
         val json = JSONObject(response)
         json.optString("message", json.optString("error", "Sin respuesta"))
     }
+
+    suspend fun printOrder(orderId: Int, restaurantName: String, footerText: String): Result<String> = runCatching {
+        val url = URL("$baseUrl/orders/$orderId/print")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+        connection.connectTimeout = 5000
+        connection.readTimeout = 8000
+        val body = JSONObject()
+        body.put("restaurant_name", restaurantName)
+        body.put("footer_text", footerText)
+        connection.outputStream.use { os ->
+            os.write(body.toString().toByteArray(Charsets.UTF_8))
+            os.flush()
+        }
+        val responseCode = connection.responseCode
+        val response = if (responseCode >= 400) {
+            connection.errorStream.bufferedReader().readText()
+        } else {
+            connection.inputStream.bufferedReader().readText()
+        }
+        connection.disconnect()
+        val json = JSONObject(response)
+        json.optString("message", json.optString("error", "Sin respuesta"))
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
 // VIEWMODEL
 // ═══════════════════════════════════════════════════════════════
 
-class RestaurantViewModel(private val apiClient: ApiClient) : ViewModel() {
+class RestaurantViewModel(
+    private val apiClient: ApiClient,
+    private val dataStore: DataStore<Preferences>
+) : ViewModel() {
 
     var isLoading by mutableStateOf(false)
     var errorMessage by mutableStateOf<String?>(null)
@@ -324,10 +372,45 @@ class RestaurantViewModel(private val apiClient: ApiClient) : ViewModel() {
     // Platos configurables del día
     var platosDelDia by mutableStateOf(listOf<String>())
 
+    // Configuración de impresión
+    var restaurantName by mutableStateOf("Mi Restaurante")
+    var footerText by mutableStateOf("Gracias por su visita")
+
     var currentOrder by mutableStateOf(listOf<OrderItem>())
     var selectedTable by mutableStateOf<Table?>(null)
 
-    init { loadInitialData() }
+    init {
+        loadInitialData()
+        loadPersistedPrefs()
+    }
+
+    private fun loadPersistedPrefs() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val prefs = dataStore.data.first()
+            prefs[PrefKeys.PLATOS_DEL_DIA]?.let { raw ->
+                val lista = raw.split("|").map { it.trim() }.filter { it.isNotBlank() }
+                withContext(Dispatchers.Main) { platosDelDia = lista }
+            }
+            prefs[PrefKeys.GUARNICIONES_DEL_DIA]?.let { raw ->
+                val lista = raw.split("|").map { it.trim() }.filter { it.isNotBlank() }
+                withContext(Dispatchers.Main) { guarnicionesDelDia = lista }
+            }
+        }
+    }
+
+    fun savePlatosDelDia(platos: List<String>) {
+        platosDelDia = platos
+        viewModelScope.launch(Dispatchers.IO) {
+            dataStore.edit { it[PrefKeys.PLATOS_DEL_DIA] = platos.joinToString("|") }
+        }
+    }
+
+    fun saveGuarnicionesDelDia(guarniciones: List<String>) {
+        guarnicionesDelDia = guarniciones
+        viewModelScope.launch(Dispatchers.IO) {
+            dataStore.edit { it[PrefKeys.GUARNICIONES_DEL_DIA] = guarniciones.joinToString("|") }
+        }
+    }
 
     private fun loadInitialData() {
         viewModelScope.launch {
@@ -465,6 +548,17 @@ class RestaurantViewModel(private val apiClient: ApiClient) : ViewModel() {
     fun borrarDelHistorial(entry: HistorialEntry) {
         historial = historial.filter { it != entry }
     }
+
+    fun printOrder(order: Order) {
+        viewModelScope.launch(Dispatchers.IO) {
+            apiClient.printOrder(order.orderId, restaurantName, footerText)
+                .onFailure { error ->
+                    withContext(Dispatchers.Main) {
+                        errorMessage = "Error al imprimir: ${error.message}"
+                    }
+                }
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -538,8 +632,9 @@ fun RestaurantApp() {
     }
 
     val API_BASE_URL = "http://192.168.1.21:5000"
+    val context = LocalContext.current
     val apiClient = remember { ApiClient(API_BASE_URL) }
-    val viewModel = remember { RestaurantViewModel(apiClient) }
+    val viewModel = remember { RestaurantViewModel(apiClient, context.dataStore) }
     var currentScreen by remember { mutableStateOf("menu") }
 
     Scaffold(
@@ -1371,7 +1466,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                                     viewModel.loadOrders()
                                 }
                             }, modifier = Modifier.weight(1f)) { Text("Iniciar") }
-                            OutlinedButton(onClick = { /* imprimir — pendiente */ }, modifier = Modifier.weight(1f)) {
+                            OutlinedButton(onClick = { viewModel.printOrder(currentOrder) }, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Default.Print, contentDescription = null)
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Imprimir")
@@ -1428,7 +1523,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                                 viewModel.loadOrders()
                                 onBack()
                             }, modifier = Modifier.weight(1f)) { Text("Terminar") }
-                            OutlinedButton(onClick = { /* imprimir — pendiente */ }, modifier = Modifier.weight(1f)) {
+                            OutlinedButton(onClick = { viewModel.printOrder(currentOrder) }, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Default.Print, contentDescription = null)
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Imprimir")
@@ -1438,7 +1533,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
 
                     if (currentOrder.status == "completed") {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = { /* imprimir — pendiente */ }, modifier = Modifier.weight(1f)) {
+                            OutlinedButton(onClick = { viewModel.printOrder(currentOrder) }, modifier = Modifier.weight(1f)) {
                                 Icon(Icons.Default.Print, contentDescription = null)
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Imprimir")
@@ -1607,7 +1702,7 @@ fun HistorialDetail(entry: HistorialEntry, viewModel: RestaurantViewModel, onBac
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { /* imprimir — pendiente */ }, modifier = Modifier.weight(1f)) {
+                    OutlinedButton(onClick = { viewModel.printOrder(entry.order) }, modifier = Modifier.weight(1f)) {
                         Icon(Icons.Default.Print, contentDescription = null)
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Imprimir")
@@ -1675,7 +1770,15 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
     var guarnicionesInput by remember { mutableStateOf(viewModel.guarnicionesDelDia.joinToString(", ")) }
     var guarnicionesSaved by remember { mutableStateOf(false) }
     var platosInput by remember { mutableStateOf(viewModel.platosDelDia.joinToString(", ")) }
-    var platosSaved by remember { mutableStateOf(false) }
+    var platosSaved by remember { mutableStateOf(false)}
+
+        LaunchedEffect(viewModel.platosDelDia) {
+            if (!platosSaved) platosInput = viewModel.platosDelDia.joinToString(", ")
+        }
+        LaunchedEffect(viewModel.guarnicionesDelDia) {
+            if (!guarnicionesSaved) guarnicionesInput = viewModel.guarnicionesDelDia.joinToString(", ")
+        }
+
 
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { TopAppBar(title = { Text("Configuración") }) }
@@ -1698,6 +1801,48 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
         }
 
         item {
+            var printSaved by remember { mutableStateOf(false) }
+            var nameInput by remember { mutableStateOf(viewModel.restaurantName) }
+            var footerInput by remember { mutableStateOf(viewModel.footerText) }
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Impresión", fontWeight = FontWeight.Bold)
+                    Text(
+                        "Texto que aparece en el encabezado y pie de cada ticket.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = nameInput,
+                        onValueChange = { nameInput = it; printSaved = false },
+                        label = { Text("Nombre del restaurante") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = footerInput,
+                        onValueChange = { footerInput = it; printSaved = false },
+                        label = { Text("Mensaje de pie de ticket") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            viewModel.restaurantName = nameInput.trim().ifBlank { "Mi Restaurante" }
+                            viewModel.footerText     = footerInput.trim().ifBlank { "Gracias por su visita" }
+                            printSaved = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (printSaved) "✓ Configuración guardada" else "Guardar configuración de impresión")
+                    }
+                }
+            }
+        }
+
+        item {
             Card(modifier = Modifier.padding(16.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Platos del día", fontWeight = FontWeight.Bold)
@@ -1714,11 +1859,12 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
                         onClick = {
-                            viewModel.platosDelDia = platosInput
+                            val platos = platosInput
                                 .split(",")
                                 .map { it.trim() }
                                 .filter { it.isNotBlank() }
                                 .take(4)
+                            viewModel.savePlatosDelDia(platos)
                             platosSaved = true
                         },
                         modifier = Modifier.fillMaxWidth()
@@ -1755,10 +1901,11 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
                         onClick = {
-                            viewModel.guarnicionesDelDia = guarnicionesInput
+                            val guarniciones = guarnicionesInput
                                 .split(",")
                                 .map { it.trim() }
                                 .filter { it.isNotBlank() }
+                            viewModel.saveGuarnicionesDelDia(guarniciones)
                             guarnicionesSaved = true
                         },
                         modifier = Modifier.fillMaxWidth()

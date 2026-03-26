@@ -44,6 +44,7 @@ android {
 }
 
 dependencies {
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
     // Compose BOM
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     
