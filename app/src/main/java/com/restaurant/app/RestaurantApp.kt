@@ -26,6 +26,9 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
@@ -593,6 +596,35 @@ val ITEMS_CON_MENU = listOf("Menu normal", "Menu Extra")
 // Entradas fijas siempre disponibles
 val ENTRADAS_FIJAS = listOf("Crema de zapallo", "Consomé", "Ensalada")
 
+
+// ═══════════════════════════════════════════════════════════════
+// ZOOM TEMPORAL CON GESTO PINCH
+// ═══════════════════════════════════════════════════════════════
+
+@Composable
+fun PinchToZoomLayout(content: @Composable () -> Unit) {
+    var scale by remember { mutableStateOf(1f) }
+    val state = rememberTransformableState { zoomChange, _, _ ->
+        scale = (scale * zoomChange).coerceIn(1f, 3f)
+    }
+    // Resetea al soltar los dedos
+    LaunchedEffect(state.isTransformInProgress) {
+        if (!state.isTransformInProgress) {
+            scale = 1f
+        }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .transformable(state = state)
+            .graphicsLayer(scaleX = scale, scaleY = scale)
+    ) {
+        content()
+    }
+}
+
+
+
 // ═══════════════════════════════════════════════════════════════
 // SPLASH SCREEN
 // ═══════════════════════════════════════════════════════════════
@@ -600,7 +632,7 @@ val ENTRADAS_FIJAS = listOf("Crema de zapallo", "Consomé", "Ensalada")
 @Composable
 fun SplashScreen(onFinished: () -> Unit) {
     LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(3500)
+        kotlinx.coroutines.delay(2500)
         onFinished()
     }
     Box(
@@ -655,27 +687,33 @@ fun RestaurantApp() {
             }
         }
     ) { paddingValues ->
-        Box(modifier = Modifier.padding(paddingValues)) {
-            when (currentScreen) {
-                "menu" -> MenuScreen(viewModel)
-                "orders" -> OrdersScreen(viewModel)
-                "historial" -> HistorialScreen(viewModel)
-                "config" -> ConfigScreen(viewModel)
-            }
-            viewModel.errorMessage?.let { error ->
-                AlertDialog(
-                    onDismissRequest = { viewModel.errorMessage = null },
-                    title = { Text("Error") },
-                    text = { Text(error) },
-                    confirmButton = { TextButton(onClick = { viewModel.errorMessage = null }) { Text("OK") } }
-                )
-            }
-            if (viewModel.isLoading) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
+        PinchToZoomLayout {
+            Box(modifier = Modifier.padding(paddingValues)) {
+                when (currentScreen) {
+                    "menu" -> MenuScreen(viewModel)
+                    "orders" -> OrdersScreen(viewModel)
+                    "historial" -> HistorialScreen(viewModel)
+                    "config" -> ConfigScreen(viewModel)
+                }
+                viewModel.errorMessage?.let { error ->
+                    AlertDialog(
+                        onDismissRequest = { viewModel.errorMessage = null },
+                        title = { Text("Error") },
+                        text = { Text(error) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                viewModel.errorMessage = null
+                            }) { Text("OK") }
+                        }
+                    )
+                }
+                if (viewModel.isLoading) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
                 }
             }
-        }
+        } // cierra PinchToZoom layout
     }
 }
 
@@ -894,6 +932,7 @@ fun ReservaDialog(
 fun MenuScreen(viewModel: RestaurantViewModel) {
     var showTableSelector by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var ordenColapsada by remember { mutableStateOf(false) }
     var itemWithOptions by remember { mutableStateOf<MenuItem?>(null) }
     var itemWithMenuCompleto by remember { mutableStateOf<MenuItem?>(null) }
     var tableParaReserva by remember { mutableStateOf<Table?>(null) }
@@ -940,65 +979,109 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
         )
 
         if (viewModel.currentOrder.isNotEmpty()) {
-            Card(modifier = Modifier.fillMaxWidth().padding(8.dp).heightIn(max = 200.dp)) {
-                Box {
-                    Column(
-                        modifier = Modifier
-                            .padding(8.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        Text("Comanda actual:", fontWeight = FontWeight.Bold)
-                        viewModel.currentOrder.forEach { orderItem ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Row {
-                                        Text("${orderItem.quantity}x ${orderItem.menuItem.name}")
-                                        if (orderItem.notes.isNotEmpty()) {
-                                            Text(" (${orderItem.notes})", fontSize = 12.sp,
-                                                fontStyle = FontStyle.Italic,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Card(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Comanda actual:", fontWeight = FontWeight.Bold)
+                    IconButton(onClick = { ordenColapsada = !ordenColapsada }) {
+                        Icon(
+                            if (ordenColapsada) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                            contentDescription = if (ordenColapsada) "Expandir" else "Colapsar"
+                        )
+                    }
+                }
+                if (!ordenColapsada) {
+                    Box {
+                        Column(
+                            modifier = Modifier
+                                .padding(8.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+
+                            viewModel.currentOrder.forEach { orderItem ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row {
+                                            Text("${orderItem.quantity}x ${orderItem.menuItem.name}")
+                                            if (orderItem.notes.isNotEmpty()) {
+                                                Text(
+                                                    " (${orderItem.notes})", fontSize = 12.sp,
+                                                    fontStyle = FontStyle.Italic,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                     }
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    IconButton(onClick = { viewModel.removeItemFromCurrentOrder(orderItem.menuItem, orderItem.notes) }) {
-                                        Icon(Icons.Default.Remove, contentDescription = "Quitar uno")
-                                    }
-                                    IconButton(onClick = { viewModel.addItemToCurrentOrder(orderItem.menuItem, orderItem.notes) }) {
-                                        Icon(Icons.Default.Add, contentDescription = "Agregar uno")
-                                    }
-                                    IconButton(onClick = {
-                                        viewModel.currentOrder = viewModel.currentOrder.filter {
-                                            !(it.menuItem.id == orderItem.menuItem.id && it.notes == orderItem.notes)
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        IconButton(onClick = {
+                                            viewModel.removeItemFromCurrentOrder(
+                                                orderItem.menuItem,
+                                                orderItem.notes
+                                            )
+                                        }) {
+                                            Icon(
+                                                Icons.Default.Remove,
+                                                contentDescription = "Quitar uno"
+                                            )
                                         }
-                                    }) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Eliminar",
-                                            tint = MaterialTheme.colorScheme.error)
+                                        IconButton(onClick = {
+                                            viewModel.addItemToCurrentOrder(
+                                                orderItem.menuItem,
+                                                orderItem.notes
+                                            )
+                                        }) {
+                                            Icon(
+                                                Icons.Default.Add,
+                                                contentDescription = "Agregar uno"
+                                            )
+                                        }
+                                        IconButton(onClick = {
+                                            viewModel.currentOrder = viewModel.currentOrder.filter {
+                                                !(it.menuItem.id == orderItem.menuItem.id && it.notes == orderItem.notes)
+                                            }
+                                        }) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "Eliminar",
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        }
                                     }
                                 }
                             }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            val total =
+                                viewModel.currentOrder.sumOf { it.quantity * it.menuItem.price }
+                            Text("Total: ${formatCLP(total)}", fontWeight = FontWeight.Bold)
+                            Button(
+                                onClick = { showTableSelector = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Asignar a mesa")
+                            }
                         }
-                        Spacer(modifier = Modifier.height(8.dp))
-                        val total = viewModel.currentOrder.sumOf { it.quantity * it.menuItem.price }
-                        Text("Total: ${formatCLP(total)}", fontWeight = FontWeight.Bold)
-                        Button(onClick = { showTableSelector = true }, modifier = Modifier.fillMaxWidth()) {
-                            Text("Asignar a mesa")}
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(24.dp)
-                            .align(Alignment.BottomCenter)
-                            .background(
-                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    colors = listOf(Color.Transparent, Color.Gray.copy(alpha = 0.3f))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(24.dp)
+                                .align(Alignment.BottomCenter)
+                                .background(
+                                    brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                        colors = listOf(
+                                            Color.Transparent,
+                                            Color.Gray.copy(alpha = 0.3f)
+                                        )
+                                    )
                                 )
-                            )
-                    ) // cierra Box degradé
+                        ) // cierra Box degradé
+                    }
                 }
             }
         }
@@ -1460,7 +1543,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
 
                     if (currentOrder.status == "pending") {
                         var showAsignarMesa by remember { mutableStateOf(false) }
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)){
                             Button(onClick = {
                                 if (currentOrder.tableNumber == "Reserva") {
                                     showAsignarMesa = true
