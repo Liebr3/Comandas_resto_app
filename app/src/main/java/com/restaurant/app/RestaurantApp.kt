@@ -1268,15 +1268,39 @@ fun MenuItemCard(item: MenuItem, onClick: () -> Unit) {
 fun OrdersScreen(viewModel: RestaurantViewModel) {
     var selectedOrder by remember { mutableStateOf<Order?>(null) }
     var selectedTab by remember { mutableStateOf(0) }
+    val selectedTerminadas = remember { mutableStateListOf<Int>() } // lista de orderId seleccionados
+    var modoSeleccion by remember { mutableStateOf(false) }
 
-    val activeOrders = viewModel.orders.filter { it.status in listOf("pending", "in_progress") && it.tableNumber != "Reserva" }
-    val reservaOrders = viewModel.orders.filter { it.tableNumber == "Reserva" && it.status in listOf("pending", "in_progress") }
-    val terminatedOrders = viewModel.orders.filter { it.status == "completed" }
+    val activeOrders = viewModel.orders.filter { it.status in listOf("pending", "in_progress") && it.tableNumber != "Reserva" }.sortedByDescending { it.createdAt }
+    val reservaOrders = viewModel.orders.filter { it.tableNumber == "Reserva" && it.status in listOf("pending", "in_progress") }.sortedByDescending { it.createdAt }
+    val terminatedOrders = viewModel.orders.filter { it.status == "completed" }.sortedByDescending { it.createdAt }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("Comandas") },
             actions = {
+                if (selectedTab == 2) {
+                    if (modoSeleccion && selectedTerminadas.isNotEmpty()) {
+                        IconButton(onClick = {
+                            terminatedOrders.filter { it.orderId in selectedTerminadas }
+                                .forEach { viewModel.guardarEnHistorial(it) }
+                            selectedTerminadas.clear()
+                            modoSeleccion = false
+                            viewModel.loadOrders()
+                        }) {
+                            Icon(Icons.Default.Save, contentDescription = "Guardar selección")
+                        }
+                    }
+                    IconButton(onClick = {
+                        modoSeleccion = !modoSeleccion
+                        selectedTerminadas.clear()
+                    }) {
+                        Icon(
+                            if (modoSeleccion) Icons.Default.Close else Icons.Default.CheckBox,
+                            contentDescription = if (modoSeleccion) "Cancelar selección" else "Seleccionar"
+                        )
+                    }
+                }
                 IconButton(onClick = { viewModel.loadOrders() }) {
                     Icon(Icons.Default.Refresh, contentDescription = "Actualizar")
                 }
@@ -1313,7 +1337,20 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
             } else {
                 LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(ordersToShow) { order ->
-                        OrderCard(order, showPrice = selectedTab == 2) { selectedOrder = order }
+                        if (selectedTab == 2 && modoSeleccion) {
+                            val isSelected = order.orderId in selectedTerminadas
+                            OrderCard(
+                                order = order,
+                                showPrice = true,
+                                isSelected = isSelected,
+                                onClick = {
+                                    if (isSelected) selectedTerminadas.remove(order.orderId)
+                                    else selectedTerminadas.add(order.orderId)
+                                }
+                            )
+                        } else {
+                            OrderCard(order, showPrice = selectedTab == 2) { selectedOrder = order }
+                        }
                     }
                 }
             }
@@ -1329,13 +1366,14 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
 }
 
 @Composable
-fun OrderCard(order: Order, showPrice: Boolean = false, onClick: () -> Unit) {
+fun OrderCard(order: Order, showPrice: Boolean = false, isSelected: Boolean = false, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
-            containerColor = when (order.status) {
-                "pending" -> MaterialTheme.colorScheme.errorContainer
-                "in_progress" -> MaterialTheme.colorScheme.tertiaryContainer
+            containerColor = when {
+                isSelected -> MaterialTheme.colorScheme.primaryContainer
+                order.status == "pending" -> MaterialTheme.colorScheme.errorContainer
+                order.status == "in_progress" -> MaterialTheme.colorScheme.tertiaryContainer
                 else -> MaterialTheme.colorScheme.surfaceVariant
             }
         )
@@ -1345,12 +1383,15 @@ fun OrderCard(order: Order, showPrice: Boolean = false, onClick: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(text = "Mesa ${order.tableNumber}", fontSize = 22.sp, fontWeight = FontWeight.Bold)
                 Text(text = order.items.joinToString(", ") { "${it.quantity}x ${it.name}" }, fontSize = 16.sp)
                 Text(text = order.createdAt, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (showPrice) {
+            if (isSelected) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary)
+            } else if (showPrice) {
                 Text(text = formatCLP(order.total), fontSize = 20.sp, fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary)
             }
@@ -1405,8 +1446,9 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                     color = MaterialTheme.colorScheme.onTertiaryContainer)
             }
 
-            Card(modifier = Modifier.padding(16.dp)) {
-                Column(modifier = Modifier.padding(16.dp)) {
+            // Items actuales con altura máxima y scroll propio
+            Card(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).heightIn(max = 200.dp)) {
+                Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
                     Text("Items actuales:", fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(8.dp))
                     currentOrder.items.forEach { item ->
@@ -1435,6 +1477,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             val filteredItems = if (searchQuery.isBlank()) viewModel.menuItems
             else viewModel.menuItems.filter { it.name.contains(searchQuery, ignoreCase = true) }
 
+            // Buscador fijo
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -1451,7 +1494,9 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                 singleLine = true
             )
 
+            // Lista del menú ocupa el espacio restante
             LazyColumn(
+                modifier = Modifier.weight(1f),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -1692,9 +1737,74 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
 @Composable
 fun HistorialScreen(viewModel: RestaurantViewModel) {
     var selectedEntry by remember { mutableStateOf<HistorialEntry?>(null) }
+    val selectedEntries = remember { mutableStateListOf<HistorialEntry>() }
+    var modoSeleccion by remember { mutableStateOf(false) }
+    var showClaveDialog by remember { mutableStateOf(false) }
+    var claveIngresada by remember { mutableStateOf("") }
+    var claveError by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text("Historial del día") })
+        TopAppBar(
+            title = { Text("Historial del día") },
+            actions = {
+                if (modoSeleccion && selectedEntries.isNotEmpty()) {
+                    IconButton(onClick = {
+                        showClaveDialog = true
+                        claveIngresada = ""
+                        claveError = false
+                    }) {
+                        Icon(Icons.Default.Delete, contentDescription = "Borrar selección",
+                            tint = MaterialTheme.colorScheme.error)
+                    }
+                }
+                IconButton(onClick = {
+                    modoSeleccion = !modoSeleccion
+                    selectedEntries.clear()
+                }) {
+                    Icon(
+                        if (modoSeleccion) Icons.Default.Close else Icons.Default.CheckBox,
+                        contentDescription = if (modoSeleccion) "Cancelar selección" else "Seleccionar"
+                    )
+                }
+            }
+        )
+
+        if (showClaveDialog) {
+            AlertDialog(
+                onDismissRequest = { showClaveDialog = false },
+                title = { Text("Borrar selección") },
+                text = {
+                    Column {
+                        Text("¿Borrar ${selectedEntries.size} entrada(s) del historial?")
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Ingresa la clave de seguridad:", fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = claveIngresada,
+                            onValueChange = { claveIngresada = it; claveError = false },
+                            label = { Text("Clave") },
+                            singleLine = true,
+                            isError = claveError,
+                            supportingText = if (claveError) {{ Text("Clave incorrecta", color = MaterialTheme.colorScheme.error) }} else null
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (claveIngresada == viewModel.claveSeguridad) {
+                                selectedEntries.forEach { viewModel.borrarDelHistorial(it) }
+                                selectedEntries.clear()
+                                modoSeleccion = false
+                                showClaveDialog = false
+                            } else { claveError = true }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) { Text("Borrar") }
+                },
+                dismissButton = { TextButton(onClick = { showClaveDialog = false }) { Text("Cancelar") } }
+            )
+        }
 
         if (selectedEntry == null) {
             if (viewModel.historial.isEmpty()) {
@@ -1703,10 +1813,25 @@ fun HistorialScreen(viewModel: RestaurantViewModel) {
                 }
             } else {
                 LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(viewModel.historial.size) { index ->
-                        val entry = viewModel.historial[index]
-                        val colorFondo = verdesHistorial[index % verdesHistorial.size]
-                        HistorialCard(entry = entry, colorFondo = colorFondo) { selectedEntry = entry }
+                    val sorted = viewModel.historial.sortedByDescending { it.order.createdAt }
+                    items(sorted.size) { index ->
+                        val entry = sorted[index]
+                        val colorFondo = if (entry in selectedEntries)
+                            MaterialTheme.colorScheme.primaryContainer
+                        else verdesHistorial[index % verdesHistorial.size]
+                        HistorialCard(
+                            entry = entry,
+                            colorFondo = colorFondo,
+                            isSelected = entry in selectedEntries,
+                            onClick = {
+                                if (modoSeleccion) {
+                                    if (entry in selectedEntries) selectedEntries.remove(entry)
+                                    else selectedEntries.add(entry)
+                                } else {
+                                    selectedEntry = entry
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -1717,7 +1842,7 @@ fun HistorialScreen(viewModel: RestaurantViewModel) {
 }
 
 @Composable
-fun HistorialCard(entry: HistorialEntry, colorFondo: Color, onClick: () -> Unit) {
+fun HistorialCard(entry: HistorialEntry, colorFondo: Color, isSelected: Boolean = false, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         colors = CardDefaults.cardColors(containerColor = colorFondo)
@@ -1727,12 +1852,17 @@ fun HistorialCard(entry: HistorialEntry, colorFondo: Color, onClick: () -> Unit)
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(text = entry.fechaGuardado, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Text(text = "Mesa ${entry.order.tableNumber}", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 Text(text = entry.order.items.joinToString(", ") { "${it.quantity}x ${it.name}" }, fontSize = 14.sp)
             }
-            Text(text = formatCLP(entry.totalConPropina), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            if (isSelected) {
+                Icon(Icons.Default.CheckCircle, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary)
+            } else {
+                Text(text = formatCLP(entry.totalConPropina), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
