@@ -582,7 +582,9 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
     "jugo natural tropical" to listOf("Mango", "Maracuyá", "Chirimoya"),
     "limonada" to listOf("Azúcar", "Endulzante"),
     "limonada menta/jengibre" to listOf("Azúcar", "Endulzante"),
-    "Mojito frutal" to listOf("Frambuesa", "Frutilla", "Mango", "Piña")
+    "Mojito frutal" to listOf("Frambuesa", "Frutilla", "Mango", "Piña"),
+    "Churrasca 1 agregado" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo"),
+    "Churrasca 2 agregados" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo")
 )
 
 // Productos que usan el diálogo de Menú completo (entrada + guarnición)
