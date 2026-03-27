@@ -54,6 +54,10 @@ val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "re
 object PrefKeys {
     val PLATOS_DEL_DIA       = stringPreferencesKey("platos_del_dia")
     val GUARNICIONES_DEL_DIA = stringPreferencesKey("guarniciones_del_dia")
+    val RESTAURANT_NAME      = stringPreferencesKey("restaurant_name")
+    val FOOTER_TEXT          = stringPreferencesKey("footer_text")
+    val TOP_MARGIN           = stringPreferencesKey("top_margin")
+    val BOTTOM_MARGIN        = stringPreferencesKey("bottom_margin")
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -323,7 +327,7 @@ class ApiClient(private val baseUrl: String) {
         json.optString("message", json.optString("error", "Sin respuesta"))
     }
 
-    suspend fun printOrder(orderId: Int, orderStatus: String, restaurantName: String, footerText: String): Result<String> = runCatching {
+    suspend fun printOrder(orderId: Int, orderStatus: String, restaurantName: String, footerText: String, topMargin: Int = 0, bottomMargin: Int = 0): Result<String> = runCatching {
         val url = URL("$baseUrl/orders/$orderId/print")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
@@ -335,6 +339,8 @@ class ApiClient(private val baseUrl: String) {
         body.put("restaurant_name", restaurantName)
         body.put("footer_text", footerText)
         body.put("for_kitchen", orderStatus in listOf("pending", "in_progress"))
+        body.put("top_margin", topMargin)
+        body.put("bottom_margin", bottomMargin)
         connection.outputStream.use { os ->
             os.write(body.toString().toByteArray(Charsets.UTF_8))
             os.flush()
@@ -379,6 +385,8 @@ class RestaurantViewModel(
     // Configuración de impresión
     var restaurantName by mutableStateOf("Mi Restaurante")
     var footerText by mutableStateOf("Gracias por su visita")
+    var topMargin by mutableStateOf(0)
+    var bottomMargin by mutableStateOf(0)
 
     var currentOrder by mutableStateOf(listOf<OrderItem>())
     var selectedTable by mutableStateOf<Table?>(null)
@@ -399,6 +407,11 @@ class RestaurantViewModel(
                 val lista = raw.split("|").map { it.trim() }.filter { it.isNotBlank() }
                 withContext(Dispatchers.Main) { guarnicionesDelDia = lista }
             }
+            prefs[PrefKeys.RESTAURANT_NAME]?.let { withContext(Dispatchers.Main) { restaurantName = it } }
+            prefs[PrefKeys.FOOTER_TEXT]?.let { withContext(Dispatchers.Main) { footerText = it } }
+            prefs[PrefKeys.TOP_MARGIN]?.let { withContext(Dispatchers.Main) { topMargin = it.toIntOrNull() ?: 0 } }
+            prefs[PrefKeys.BOTTOM_MARGIN]?.let { withContext(Dispatchers.Main) { bottomMargin = it.toIntOrNull() ?: 0 } }
+
         }
     }
 
@@ -408,11 +421,25 @@ class RestaurantViewModel(
             dataStore.edit { it[PrefKeys.PLATOS_DEL_DIA] = platos.joinToString("|") }
         }
     }
-
     fun saveGuarnicionesDelDia(guarniciones: List<String>) {
         guarnicionesDelDia = guarniciones
         viewModelScope.launch(Dispatchers.IO) {
             dataStore.edit { it[PrefKeys.GUARNICIONES_DEL_DIA] = guarniciones.joinToString("|") }
+        }
+    }
+
+    fun savePrintConfig(name: String, footer: String, top: Int, bottom: Int) {
+        restaurantName = name
+        footerText = footer
+        topMargin = top
+        bottomMargin = bottom
+        viewModelScope.launch(Dispatchers.IO) {
+            dataStore.edit {
+                it[PrefKeys.RESTAURANT_NAME] = name
+                it[PrefKeys.FOOTER_TEXT]     = footer
+                it[PrefKeys.TOP_MARGIN]      = top.toString()
+                it[PrefKeys.BOTTOM_MARGIN]   = bottom.toString()
+            }
         }
     }
 
@@ -555,7 +582,7 @@ class RestaurantViewModel(
 
     fun printOrder(order: Order) {
         viewModelScope.launch(Dispatchers.IO) {
-            apiClient.printOrder(order.orderId, order.status, restaurantName, footerText)
+            apiClient.printOrder(order.orderId, order.status, restaurantName, footerText, topMargin, bottomMargin)
                 .onFailure { error ->
                     withContext(Dispatchers.Main) {
                         errorMessage = "Error al imprimir: ${error.message}"
@@ -2020,6 +2047,14 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
             var printSaved by remember { mutableStateOf(false) }
             var nameInput by remember { mutableStateOf(viewModel.restaurantName) }
             var footerInput by remember { mutableStateOf(viewModel.footerText) }
+            var topInput by remember { mutableStateOf(viewModel.topMargin.toString()) }
+            var bottomInput by remember { mutableStateOf(viewModel.bottomMargin.toString()) }
+
+            LaunchedEffect(viewModel.restaurantName) { if (!printSaved) nameInput = viewModel.restaurantName }
+            LaunchedEffect(viewModel.footerText) { if (!printSaved) footerInput = viewModel.footerText }
+            LaunchedEffect(viewModel.topMargin) { if (!printSaved) topInput = viewModel.topMargin.toString() }
+            LaunchedEffect(viewModel.bottomMargin) { if (!printSaved) bottomInput = viewModel.bottomMargin.toString() }
+
             Card(modifier = Modifier.padding(16.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("Impresión", fontWeight = FontWeight.Bold)
@@ -2044,10 +2079,31 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
                         modifier = Modifier.fillMaxWidth()
                     )
                     Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = topInput,
+                            onValueChange = { topInput = it.filter { c -> c.isDigit() }; printSaved = false },
+                            label = { Text("Margen superior (líneas)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = bottomInput,
+                            onValueChange = { bottomInput = it.filter { c -> c.isDigit() }; printSaved = false },
+                            label = { Text("Margen inferior (líneas)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
                     Button(
                         onClick = {
-                            viewModel.restaurantName = nameInput.trim().ifBlank { "Mi Restaurante" }
-                            viewModel.footerText     = footerInput.trim().ifBlank { "Gracias por su visita" }
+                            viewModel.savePrintConfig(
+                                nameInput.trim().ifBlank { "Mi Restaurante" },
+                                footerInput.trim().ifBlank { "Gracias por su visita" },
+                                topInput.toIntOrNull() ?: 0,
+                                bottomInput.toIntOrNull() ?: 0
+                            )
                             printSaved = true
                         },
                         modifier = Modifier.fillMaxWidth()
