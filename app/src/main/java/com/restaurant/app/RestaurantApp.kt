@@ -1,6 +1,7 @@
 package com.restaurant.app
 
 import android.os.Bundle
+import android.content.Intent
 import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import androidx.datastore.core.DataStore
@@ -980,9 +981,34 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
     }
 
     Column(modifier = Modifier.fillMaxSize().imePadding()) {
+        val context = LocalContext.current
         TopAppBar(
             title = { Text("Menú del Restaurante") },
             actions = {
+                IconButton(onClick = {
+                    val sb = StringBuilder()
+                    sb.appendLine("🍽️ MENÚ DEL DÍA")
+                    sb.appendLine()
+                    if (viewModel.platosDelDia.isNotEmpty()) {
+                        sb.appendLine("Platos:")
+                        viewModel.platosDelDia.forEach { sb.appendLine("• $it") }
+                        sb.appendLine()
+                    }
+                    sb.appendLine("Entradas:")
+                    ENTRADAS_FIJAS.forEach { sb.appendLine("• $it") }
+                    sb.appendLine()
+                    if (viewModel.guarnicionesDelDia.isNotEmpty()) {
+                        sb.appendLine("Guarnición:")
+                        viewModel.guarnicionesDelDia.forEach { sb.appendLine("• $it") }
+                    }
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, sb.toString().trim())
+                    }
+                    context.startActivity(Intent.createChooser(intent, "Compartir menú del día"))
+                }) {
+                    Icon(Icons.Default.Share, contentDescription = "Compartir menú del día")
+                }
                 IconButton(onClick = { viewModel.loadMenu() }) {
                     Icon(Icons.Default.Refresh, contentDescription = "Actualizar")
                 }
