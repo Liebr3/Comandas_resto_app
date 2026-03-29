@@ -615,7 +615,8 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
     "limonada menta/jengibre" to listOf("Azúcar", "Endulzante"),
     "Mojito frutal" to listOf("Frambuesa", "Frutilla", "Mango", "Piña"),
     "Churrasca 1 agregado" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo"),
-    "Churrasca 2 agregados" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo")
+    "Churrasca 2 agregados" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo"),
+    "bebida lata" to listOf("Coca Cola", "Coca Zero", "Kem Piña", "Limón Soda", "Bilz", "Pap", "Canada Dry")
 )
 
 // Productos que usan el diálogo de Menú completo (entrada + guarnición)
@@ -874,8 +875,8 @@ fun MenuCompletoDialog(
             Button(onClick = {
                 val partes = mutableListOf<String>()
                 platoSeleccionado.value?.let { partes.add("Plato: $it") }
-                entradaSeleccionada.value?.let { partes.add("Entrada: $it") }
                 guarnicionSeleccionada.value?.let { partes.add("Guarnición: $it") }
+                entradaSeleccionada.value?.let { partes.add("Entrada: $it") }
                 onConfirm(partes.joinToString(" | "))
             }) { Text("Agregar") }
         },
@@ -1586,7 +1587,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             // ── MODO VISTA NORMAL ──
             Card(modifier = Modifier.padding(16.dp)) {
                 Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-                    Text("Mesa ${currentOrder.tableNumber}", fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Text("Mesa ${currentOrder.tableNumber}", fontSize = 28.sp, fontWeight = FontWeight.Bold)
                     Text("Estado: ${when(currentOrder.status) {
                         "pending" -> "Pendiente"
                         "in_progress" -> "En preparación"
