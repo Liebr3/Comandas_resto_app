@@ -386,6 +386,17 @@ class RestaurantViewModel(
     // Configuración de impresión
     var restaurantName by mutableStateOf("Mi Restaurante")
     var footerText by mutableStateOf("Gracias por su visita")
+    // Generador de menú semanal
+    // Generador de menú semanal
+    var platosGenerador by mutableStateOf(listOf(
+        "Pastas con salsa alfredo", "Pastas con salsa boloñesa", "Pastas con salsa pesto de perejil",
+        "Pastas con salsa McCheesse", "Tallarines de zapallo italiano con salsa alfredo",
+        "Tallarines de zapallo italiano con salsa boloñesa", "Budin de zapallo italiano",
+        "Lasaña de zapallo italiano", "Lasaña boloñesa", "Pollo asado (trutro)",
+        "Strogonoff de pollo", "Quiche Napolitano", "Quiche de champiñon/pollo/choclo",
+        "Estofado de cerdo", "Lentejas con longaniza", "Tortilla de atun",
+        "Zapallos italianos rellenos", "Chapsui mixto", "Lasaña de berenjenas", "Ramen de pollo"
+    ))
     var topMargin by mutableStateOf(0)
     var bottomMargin by mutableStateOf(0)
 
@@ -2245,7 +2256,122 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
                 }
             }
         }
+        item {
+            val context = LocalContext.current
+            val diasSemana = listOf("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
+            var platosInput by remember { mutableStateOf(viewModel.platosGenerador.joinToString(", ")) }
+            var platosSaved by remember { mutableStateOf(false) }
+            val diasSeleccionados = remember { mutableStateListOf("Lunes", "Martes", "Miércoles", "Jueves", "Viernes") }
+            var menuGenerado by remember { mutableStateOf("") }
 
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Generador de menú semanal", fontWeight = FontWeight.Bold)
+                    Text("Ingresa los platos disponibles separados por coma.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = platosInput,
+                        onValueChange = { platosInput = it; platosSaved = false },
+                        label = { Text("Platos disponibles") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Button(
+                        onClick = {
+                            viewModel.platosGenerador = platosInput
+                                .split(",").map { it.trim() }.filter { it.isNotBlank() }
+                            platosSaved = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (platosSaved) "✓ Platos guardados" else "Guardar platos")
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Días de la semana:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    diasSemana.forEach { dia ->
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                if (dia in diasSeleccionados) diasSeleccionados.remove(dia)
+                                else diasSeleccionados.add(diasSemana.filter { it in diasSeleccionados || it == dia }.first().let { dia })
+                            }
+                        ) {
+                            Checkbox(
+                                checked = dia in diasSeleccionados,
+                                onCheckedChange = {
+                                    if (it) diasSeleccionados.add(dia) else diasSeleccionados.remove(dia)
+                                }
+                            )
+                            Text(dia, fontSize = 14.sp)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            val diasOrdenados = diasSemana.filter { it in diasSeleccionados }
+                            menuGenerado = generarMenuSemanal(viewModel.platosGenerador, diasOrdenados)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = viewModel.platosGenerador.size >= diasSeleccionados.size * 2
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Generar menú")
+                    }
+
+                    if (menuGenerado.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Text(
+                                text = menuGenerado,
+                                modifier = Modifier.padding(12.dp),
+                                fontSize = 13.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    val diasOrdenados = diasSemana.filter { it in diasSeleccionados }
+                                    menuGenerado = generarMenuSemanal(viewModel.platosGenerador, diasOrdenados)
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Nueva lista")
+                            }
+                            Button(
+                                onClick = {
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TEXT, menuGenerado)
+                                    }
+                                    context.startActivity(Intent.createChooser(intent, "Compartir menú semanal"))
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = null)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Compartir")
+                            }
+                        }
+                    }
+                    if (viewModel.platosGenerador.size < diasSeleccionados.size * 2) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            "Necesitas al menos ${diasSeleccionados.size * 2} platos para ${diasSeleccionados.size} días.",
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            }
+        }
         item {
             Card(modifier = Modifier.padding(16.dp)) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -2258,6 +2384,50 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
             }
         }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GENERADOR DE MENÚ SEMANAL
+// ═══════════════════════════════════════════════════════════════
+
+// Palabras irrelevantes que no se usan para comparar similitud
+val STOP_WORDS = setOf("con", "de", "del", "al", "la", "el", "y", "en", "a", "sin", "salsa")
+
+fun palabrasSignificativas(plato: String): Set<String> =
+    plato.lowercase().split(" ", "/").map { it.trim() }
+        .filter { it.length > 2 && it !in STOP_WORDS }.toSet()
+
+fun sonSimilares(plato1: String, plato2: String): Boolean {
+    val p1 = palabrasSignificativas(plato1)
+    val p2 = palabrasSignificativas(plato2)
+    return p1.intersect(p2).isNotEmpty()
+}
+
+fun generarMenuSemanal(platos: List<String>, dias: List<String>): String {
+    if (platos.size < dias.size * 2) return "⚠️ Se necesitan al menos ${dias.size * 2} platos para cubrir la semana sin repetir."
+    val disponibles = platos.shuffled().toMutableList()
+    val sb = StringBuilder()
+    sb.appendLine("🗓️ MENÚ SEMANA")
+    sb.appendLine()
+    for (dia in dias) {
+        val opcion1 = disponibles.removeAt(0)
+        // busca el primer plato que no sea similar a opcion1
+        val idx = disponibles.indexOfFirst { !sonSimilares(it, opcion1) }
+        if (idx == -1) {
+            // si no hay candidato distinto, toma el siguiente igual
+            val opcion2 = disponibles.removeAt(0)
+            sb.appendLine(dia)
+            sb.appendLine("  1. $opcion1")
+            sb.appendLine("  2. $opcion2")
+        } else {
+            val opcion2 = disponibles.removeAt(idx)
+            sb.appendLine(dia)
+            sb.appendLine("  1. $opcion1")
+            sb.appendLine("  2. $opcion2")
+        }
+        sb.appendLine()
+    }
+    return sb.toString().trim()
 }
 
 // ═══════════════════════════════════════════════════════════════
