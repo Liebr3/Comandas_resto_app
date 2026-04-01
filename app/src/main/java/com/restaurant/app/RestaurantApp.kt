@@ -356,6 +356,46 @@ class ApiClient(private val baseUrl: String) {
         val json = JSONObject(response)
         json.optString("message", json.optString("error", "Sin respuesta"))
     }
+
+    suspend fun getConfigDia(): Result<Pair<List<String>, List<String>>> = runCatching {
+        val url = URL("$baseUrl/config/dia")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+        val response = connection.inputStream.bufferedReader().readText()
+        connection.disconnect()
+        val json = JSONObject(response)
+        val data = json.getJSONObject("data")
+        val platos = data.getJSONArray("platos_del_dia").let { arr ->
+            List(arr.length()) { arr.getString(it) }
+        }
+        val guarniciones = data.getJSONArray("guarniciones_del_dia").let { arr ->
+            List(arr.length()) { arr.getString(it) }
+        }
+        Pair(platos, guarniciones)
+    }
+
+    suspend fun setConfigDia(platos: List<String>, guarniciones: List<String>): Result<String> = runCatching {
+        val url = URL("$baseUrl/config/dia")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+        val body = JSONObject()
+        body.put("platos_del_dia", org.json.JSONArray(platos))
+        body.put("guarniciones_del_dia", org.json.JSONArray(guarniciones))
+        connection.outputStream.use { os ->
+            os.write(body.toString().toByteArray(Charsets.UTF_8))
+            os.flush()
+        }
+        val response = connection.inputStream.bufferedReader().readText()
+        connection.disconnect()
+        JSONObject(response).optString("message", "OK")
+    }
+
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -406,11 +446,23 @@ class RestaurantViewModel(
     init {
         loadInitialData()
         loadPersistedPrefs()
+        startAutoRefresh()
+    }
+
+    private fun startAutoRefresh() {
+        viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(15_000)
+                loadOrders()
+            }
+        }
     }
 
     private fun loadPersistedPrefs() {
         viewModelScope.launch(Dispatchers.IO) {
             val prefs = dataStore.data.first()
+
+            // Cargar caché local como fallback
             prefs[PrefKeys.PLATOS_DEL_DIA]?.let { raw ->
                 val lista = raw.split("|").map { it.trim() }.filter { it.isNotBlank() }
                 withContext(Dispatchers.Main) { platosDelDia = lista }
@@ -419,11 +471,57 @@ class RestaurantViewModel(
                 val lista = raw.split("|").map { it.trim() }.filter { it.isNotBlank() }
                 withContext(Dispatchers.Main) { guarnicionesDelDia = lista }
             }
-            prefs[PrefKeys.RESTAURANT_NAME]?.let { withContext(Dispatchers.Main) { restaurantName = it } }
-            prefs[PrefKeys.FOOTER_TEXT]?.let { withContext(Dispatchers.Main) { footerText = it } }
-            prefs[PrefKeys.TOP_MARGIN]?.let { withContext(Dispatchers.Main) { topMargin = it.toIntOrNull() ?: 0 } }
-            prefs[PrefKeys.BOTTOM_MARGIN]?.let { withContext(Dispatchers.Main) { bottomMargin = it.toIntOrNull() ?: 0 } }
 
+            // Intentar cargar desde servidor (sobreescribe el caché si hay conexión)
+            apiClient.getConfigDia()
+                .onSuccess { (platos, guarniciones) ->
+                    withContext(Dispatchers.Main) {
+                        platosDelDia = platos
+                        guarnicionesDelDia = guarniciones
+                    }
+                    // Actualizar caché local
+                    dataStore.edit {
+                        it[PrefKeys.PLATOS_DEL_DIA] = platos.joinToString("|")
+                        it[PrefKeys.GUARNICIONES_DEL_DIA] = guarniciones.joinToString("|")
+                    }
+                }
+        }
+    }
+
+    fun startConfigStream(baseUrl: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val url = java.net.URL("$baseUrl/config/stream")
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 5000
+                connection.readTimeout = 0 // sin timeout — conexión persistente
+                val reader = connection.inputStream.bufferedReader()
+                var line: String?
+                while (reader.readLine().also { line = it } != null) {
+                    val data = line ?: continue
+                    if (!data.startsWith("data:")) continue
+                    val json = JSONObject(data.removePrefix("data:").trim())
+                    val platos = json.getJSONArray("platos_del_dia").let { arr ->
+                        List(arr.length()) { arr.getString(it) }
+                    }
+                    val guarniciones = json.getJSONArray("guarniciones_del_dia").let { arr ->
+                        List(arr.length()) { arr.getString(it) }
+                    }
+                    withContext(Dispatchers.Main) {
+                        platosDelDia = platos
+                        guarnicionesDelDia = guarniciones
+                    }
+                    dataStore.edit {
+                        it[PrefKeys.PLATOS_DEL_DIA] = platos.joinToString("|")
+                        it[PrefKeys.GUARNICIONES_DEL_DIA] = guarniciones.joinToString("|")
+                    }
+                }
+            } catch (e: Exception) {
+                // Si el stream se corta, reintenta en 10 segundos
+                kotlinx.coroutines.delay(10_000)
+                startConfigStream(baseUrl)
+            }
         }
     }
 
@@ -431,12 +529,15 @@ class RestaurantViewModel(
         platosDelDia = platos
         viewModelScope.launch(Dispatchers.IO) {
             dataStore.edit { it[PrefKeys.PLATOS_DEL_DIA] = platos.joinToString("|") }
+            apiClient.setConfigDia(platos, guarnicionesDelDia)
         }
     }
+
     fun saveGuarnicionesDelDia(guarniciones: List<String>) {
         guarnicionesDelDia = guarniciones
         viewModelScope.launch(Dispatchers.IO) {
             dataStore.edit { it[PrefKeys.GUARNICIONES_DEL_DIA] = guarniciones.joinToString("|") }
+            apiClient.setConfigDia(platosDelDia, guarniciones)
         }
     }
 
@@ -631,7 +732,7 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
 )
 
 // Productos que usan el diálogo de Menú completo (entrada + guarnición)
-val ITEMS_CON_MENU = listOf("Menu normal", "Menu Extra")
+val ITEMS_CON_MENU = listOf("Menu normal", "Menu Extra", "Churrasco al plato")
 
 // Entradas fijas siempre disponibles
 val ENTRADAS_FIJAS = listOf("Crema de zapallo", "Consomé", "Ensalada")
@@ -711,6 +812,9 @@ fun RestaurantApp() {
     val apiClient = remember { ApiClient(API_BASE_URL) }
     val viewModel = remember { RestaurantViewModel(apiClient, context.dataStore) }
     var currentScreen by remember { mutableStateOf("menu") }
+    LaunchedEffect(Unit) {
+        viewModel.startConfigStream(API_BASE_URL)
+    }
 
     Scaffold(
         modifier = Modifier.imePadding(),
@@ -806,7 +910,8 @@ fun MenuCompletoDialog(
     platos: List<String>,
     guarniciones: List<String>,
     onConfirm: (notas: String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    showPlatos: Boolean = true
 ) {
     val platoSeleccionado = remember { mutableStateOf<String?>(null) }
     val entradaSeleccionada = remember { mutableStateOf<String?>(null) }
@@ -817,30 +922,35 @@ fun MenuCompletoDialog(
         title = { Text(item.name, fontWeight = FontWeight.Bold) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Text("Plato:", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                Spacer(modifier = Modifier.height(4.dp))
-                if (platos.isEmpty()) {
+                if (showPlatos) {
+                    Text("Plato:", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    if (platos.isEmpty()) {
                     Text("No hay platos configurados para hoy.", fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic)
-                } else {
-                    platos.forEach { plato ->
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.fillMaxWidth().clickable {
-                                platoSeleccionado.value = plato
-                            }.padding(vertical = 2.dp)
-                        ) {
-                            RadioButton(selected = platoSeleccionado.value == plato,
-                                onClick = { platoSeleccionado.value = plato })
-                            Text(plato, modifier = Modifier.padding(start = 4.dp))
+                    } else {
+                        platos.forEach { plato ->
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    platoSeleccionado.value = plato
+                                }.padding(vertical = 2.dp)
+                            ) {
+                                RadioButton(
+                                    selected = platoSeleccionado.value == plato,
+                                    onClick = { platoSeleccionado.value = plato })
+                                Text(plato, modifier = Modifier.padding(start = 4.dp))
+                            }
                         }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(12.dp))
+                if (showPlatos) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
 
                 Text("Entrada:", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 Spacer(modifier = Modifier.height(4.dp))
@@ -885,7 +995,7 @@ fun MenuCompletoDialog(
         confirmButton = {
             Button(onClick = {
                 val partes = mutableListOf<String>()
-                platoSeleccionado.value?.let { partes.add("Plato: $it") }
+                if (showPlatos) platoSeleccionado.value?.let { partes.add("Plato: $it") }
                 guarnicionSeleccionada.value?.let { partes.add("Guarnición: $it") }
                 entradaSeleccionada.value?.let { partes.add("Entrada: $it") }
                 onConfirm(partes.joinToString(" | "))
@@ -1070,53 +1180,48 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = Alignment.Top
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
-                                        Row {
-                                            Text("${orderItem.quantity}x ${orderItem.menuItem.name}")
-                                            if (orderItem.notes.isNotEmpty()) {
-                                                Text(
-                                                    " (${orderItem.notes})", fontSize = 12.sp,
-                                                    fontStyle = FontStyle.Italic,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
+                                        Text("${orderItem.quantity}x ${orderItem.menuItem.name}")
+                                        if (orderItem.notes.isNotEmpty()) {
+                                            Text(
+                                                orderItem.notes, fontSize = 12.sp,
+                                                fontStyle = FontStyle.Italic,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
                                         }
                                     }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        IconButton(onClick = {
-                                            viewModel.removeItemFromCurrentOrder(
-                                                orderItem.menuItem,
-                                                orderItem.notes
-                                            )
-                                        }) {
-                                            Icon(
-                                                Icons.Default.Remove,
-                                                contentDescription = "Quitar uno"
-                                            )
+                                    Row(verticalAlignment = Alignment.Top) {
+                                        IconButton(
+                                            modifier = Modifier.size(36.dp),
+                                            onClick = {
+                                                viewModel.removeItemFromCurrentOrder(
+                                                    orderItem.menuItem,
+                                                    orderItem.notes
+                                                )
+                                            }) {
+                                            Icon(Icons.Default.Remove, contentDescription = "Quitar uno")
                                         }
-                                        IconButton(onClick = {
-                                            viewModel.addItemToCurrentOrder(
-                                                orderItem.menuItem,
-                                                orderItem.notes
-                                            )
-                                        }) {
-                                            Icon(
-                                                Icons.Default.Add,
-                                                contentDescription = "Agregar uno"
-                                            )
+                                        IconButton(
+                                            modifier = Modifier.size(36.dp),
+                                            onClick = {
+                                                viewModel.addItemToCurrentOrder(
+                                                    orderItem.menuItem,
+                                                    orderItem.notes
+                                                )
+                                            }) {
+                                            Icon(Icons.Default.Add, contentDescription = "Agregar uno")
                                         }
-                                        IconButton(onClick = {
-                                            viewModel.currentOrder = viewModel.currentOrder.filter {
-                                                !(it.menuItem.id == orderItem.menuItem.id && it.notes == orderItem.notes)
-                                            }
-                                        }) {
-                                            Icon(
-                                                Icons.Default.Delete,
-                                                contentDescription = "Eliminar",
-                                                tint = MaterialTheme.colorScheme.error
-                                            )
+                                        IconButton(
+                                            modifier = Modifier.size(36.dp),
+                                            onClick = {
+                                                viewModel.currentOrder = viewModel.currentOrder.filter {
+                                                    !(it.menuItem.id == orderItem.menuItem.id && it.notes == orderItem.notes)
+                                                }
+                                            }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Eliminar",
+                                                tint = MaterialTheme.colorScheme.error)
                                         }
                                     }
                                 }
@@ -1197,6 +1302,7 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
             item = item,
             platos = viewModel.platosDelDia,
             guarniciones = viewModel.guarnicionesDelDia,
+            showPlatos = item.name != "Churrasco al plato",
             onConfirm = { notas ->
                 viewModel.addItemToCurrentOrder(item, notas)
                 itemWithMenuCompleto = null
