@@ -728,7 +728,22 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
     "Mojito frutal" to listOf("Frambuesa", "Frutilla", "Mango", "Piña"),
     "Churrasca 1 agregado" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo"),
     "Churrasca 2 agregados" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo"),
-    "bebida lata" to listOf("Coca Cola", "Coca Zero", "Kem Piña", "Limón Soda", "Bilz", "Pap", "Canada Dry")
+    "bebida lata" to listOf("Coca Cola", "Coca Zero", "Kem Piña", "Limón Soda", "Bilz", "Pap", "Canada Dry"),
+    "Cafe Bombon" to listOf("Sin Lactosa", "Descafeinado"),
+    "Cafe con leche" to listOf("Sin Lactosa", "Descafeinado"),
+    "Capuccino" to listOf("Sin Lactosa", "Descafeinado"),
+    "Capuccino Chantilly" to listOf("Sin Lactosa", "Descafeinado"),
+    "Capuccino Chantilly doble" to listOf("Sin Lactosa", "Descafeinado"),
+    "Capuccino Doble" to listOf("Sin Lactosa", "Descafeinado"),
+    "Capuccino vainilla" to listOf("Sin Lactosa", "Descafeinado"),
+    "Capuccino vainilla doble" to listOf("Sin Lactosa", "Descafeinado"),
+    "Chocolate caliente" to listOf("Sin Lactosa", "Descafeinado"),
+    "Cortado" to listOf("Sin Lactosa", "Descafeinado"),
+    "Cortado frio" to listOf("Sin Lactosa", "Descafeinado"),
+    "Latte" to listOf("Sin Lactosa", "Descafeinado"),
+    "Leche con chocolate" to listOf("Sin Lactosa", "Descafeinado"),
+    "Mokaccino" to listOf("Sin Lactosa", "Descafeinado"),
+    "Mokaccino doble" to listOf("Sin Lactosa", "Descafeinado")
 )
 
 // Productos que usan el diálogo de Menú completo (entrada + guarnición)
