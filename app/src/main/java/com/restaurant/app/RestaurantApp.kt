@@ -115,6 +115,16 @@ data class HistorialEntry(
 // CLIENTE API REST
 // ═══════════════════════════════════════════════════════════════
 
+data class ConfigDia(
+    val platos: List<String>,
+    val guarniciones: List<String>,
+    val restaurantName: String,
+    val footerText: String,
+    val topMargin: Int,
+    val bottomMargin: Int,
+    val claveSeguridad: String
+)
+
 class ApiClient(private val baseUrl: String) {
 
     suspend fun getMenu(): Result<List<MenuItem>> = runCatching {
@@ -357,7 +367,7 @@ class ApiClient(private val baseUrl: String) {
         json.optString("message", json.optString("error", "Sin respuesta"))
     }
 
-    suspend fun getConfigDia(): Result<Pair<List<String>, List<String>>> = runCatching {
+    suspend fun getConfigDia(): Result<ConfigDia> = runCatching {
         val url = URL("$baseUrl/config/dia")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "GET"
@@ -373,10 +383,23 @@ class ApiClient(private val baseUrl: String) {
         val guarniciones = data.getJSONArray("guarniciones_del_dia").let { arr ->
             List(arr.length()) { arr.getString(it) }
         }
-        Pair(platos, guarniciones)
+        val restaurantName = data.optString("restaurant_name", "Mi Restaurante")
+        val footerText     = data.optString("footer_text", "Gracias por su visita")
+        val topMargin      = data.optInt("top_margin", 0)
+        val bottomMargin   = data.optInt("bottom_margin", 0)
+        val claveSeguridad = data.optString("clave_seguridad", "1234")
+        ConfigDia(platos, guarniciones, restaurantName, footerText, topMargin, bottomMargin, claveSeguridad)
     }
 
-    suspend fun setConfigDia(platos: List<String>, guarniciones: List<String>): Result<String> = runCatching {
+    suspend fun setConfigDia(
+        platos: List<String>,
+        guarniciones: List<String>,
+        restaurantName: String = "",
+        footerText: String = "",
+        topMargin: Int = -1,
+        bottomMargin: Int = -1,
+        claveSeguridad: String = ""
+    ): Result<String> = runCatching {
         val url = URL("$baseUrl/config/dia")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
@@ -387,6 +410,11 @@ class ApiClient(private val baseUrl: String) {
         val body = JSONObject()
         body.put("platos_del_dia", org.json.JSONArray(platos))
         body.put("guarniciones_del_dia", org.json.JSONArray(guarniciones))
+        if (restaurantName.isNotEmpty()) body.put("restaurant_name", restaurantName)
+        if (footerText.isNotEmpty()) body.put("footer_text", footerText)
+        if (topMargin >= 0) body.put("top_margin", topMargin)
+        if (bottomMargin >= 0) body.put("bottom_margin", bottomMargin)
+        if (claveSeguridad.isNotEmpty()) body.put("clave_seguridad", claveSeguridad)
         connection.outputStream.use { os ->
             os.write(body.toString().toByteArray(Charsets.UTF_8))
             os.flush()
@@ -474,15 +502,23 @@ class RestaurantViewModel(
 
             // Intentar cargar desde servidor (sobreescribe el caché si hay conexión)
             apiClient.getConfigDia()
-                .onSuccess { (platos, guarniciones) ->
+                .onSuccess { config ->
                     withContext(Dispatchers.Main) {
-                        platosDelDia = platos
-                        guarnicionesDelDia = guarniciones
+                        platosDelDia    = config.platos
+                        guarnicionesDelDia = config.guarniciones
+                        if (config.restaurantName.isNotEmpty()) restaurantName = config.restaurantName
+                        if (config.footerText.isNotEmpty()) footerText = config.footerText
+                        topMargin       = config.topMargin
+                        bottomMargin    = config.bottomMargin
+                        if (config.claveSeguridad.isNotEmpty()) claveSeguridad = config.claveSeguridad
                     }
-                    // Actualizar caché local
                     dataStore.edit {
-                        it[PrefKeys.PLATOS_DEL_DIA] = platos.joinToString("|")
-                        it[PrefKeys.GUARNICIONES_DEL_DIA] = guarniciones.joinToString("|")
+                        it[PrefKeys.PLATOS_DEL_DIA]      = config.platos.joinToString("|")
+                        it[PrefKeys.GUARNICIONES_DEL_DIA] = config.guarniciones.joinToString("|")
+                        it[PrefKeys.RESTAURANT_NAME]      = config.restaurantName
+                        it[PrefKeys.FOOTER_TEXT]          = config.footerText
+                        it[PrefKeys.TOP_MARGIN]           = config.topMargin.toString()
+                        it[PrefKeys.BOTTOM_MARGIN]        = config.bottomMargin.toString()
                     }
                 }
         }
@@ -508,13 +544,27 @@ class RestaurantViewModel(
                     val guarniciones = json.getJSONArray("guarniciones_del_dia").let { arr ->
                         List(arr.length()) { arr.getString(it) }
                     }
+                    val rnombre = json.optString("restaurant_name", "")
+                    val rfooter = json.optString("footer_text", "")
+                    val rtop    = json.optInt("top_margin", -1)
+                    val rbottom = json.optInt("bottom_margin", -1)
+                    val rclave  = json.optString("clave_seguridad", "")
                     withContext(Dispatchers.Main) {
-                        platosDelDia = platos
+                        platosDelDia       = platos
                         guarnicionesDelDia = guarniciones
+                        if (rnombre.isNotEmpty()) restaurantName = rnombre
+                        if (rfooter.isNotEmpty()) footerText     = rfooter
+                        if (rtop >= 0)    topMargin    = rtop
+                        if (rbottom >= 0) bottomMargin = rbottom
+                        if (rclave.isNotEmpty()) claveSeguridad  = rclave
                     }
                     dataStore.edit {
-                        it[PrefKeys.PLATOS_DEL_DIA] = platos.joinToString("|")
+                        it[PrefKeys.PLATOS_DEL_DIA]       = platos.joinToString("|")
                         it[PrefKeys.GUARNICIONES_DEL_DIA] = guarniciones.joinToString("|")
+                        if (rnombre.isNotEmpty()) it[PrefKeys.RESTAURANT_NAME] = rnombre
+                        if (rfooter.isNotEmpty()) it[PrefKeys.FOOTER_TEXT]     = rfooter
+                        if (rtop >= 0)    it[PrefKeys.TOP_MARGIN]    = rtop.toString()
+                        if (rbottom >= 0) it[PrefKeys.BOTTOM_MARGIN] = rbottom.toString()
                     }
                 }
             } catch (e: Exception) {
@@ -553,6 +603,21 @@ class RestaurantViewModel(
                 it[PrefKeys.TOP_MARGIN]      = top.toString()
                 it[PrefKeys.BOTTOM_MARGIN]   = bottom.toString()
             }
+            apiClient.setConfigDia(
+                platosDelDia, guarnicionesDelDia,
+                restaurantName = name, footerText = footer,
+                topMargin = top, bottomMargin = bottom
+            )
+        }
+    }
+
+    fun saveClave(clave: String) {
+        claveSeguridad = clave
+        viewModelScope.launch(Dispatchers.IO) {
+            apiClient.setConfigDia(
+                platosDelDia, guarnicionesDelDia,
+                claveSeguridad = clave
+            )
         }
     }
 
@@ -2369,7 +2434,7 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
-                        onClick = { viewModel.claveSeguridad = claveInput; claveSaved = true },
+                        onClick = { viewModel.saveClave(claveInput); claveSaved = true },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(if (claveSaved) "✓ Clave guardada" else "Guardar clave")
