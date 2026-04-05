@@ -83,7 +83,8 @@ data class Table(
 data class OrderItem(
     val menuItem: MenuItem,
     val quantity: Int,
-    val notes: String = ""
+    val notes: String = "",
+    val unitPriceOverride: Double? = null
 )
 
 data class Order(
@@ -189,6 +190,7 @@ class ApiClient(private val baseUrl: String) {
             itemJson.put("menu_item_id", orderItem.menuItem.id)
             itemJson.put("quantity", orderItem.quantity)
             itemJson.put("notes", orderItem.notes)
+            orderItem.unitPriceOverride?.let { itemJson.put("unit_price", it) }
             itemsArray.put(itemJson)
         }
         val body = JSONObject()
@@ -294,7 +296,7 @@ class ApiClient(private val baseUrl: String) {
         json.optString("message", json.optString("error", "Sin respuesta"))
     }
 
-    suspend fun addItemToOrder(orderId: Int, menuItemId: Int, quantity: Int, notes: String): Result<String> = runCatching {
+    suspend fun addItemToOrder(orderId: Int, menuItemId: Int, quantity: Int, notes: String, unitPriceOverride: Double? = null): Result<String> = runCatching {
         val url = URL("$baseUrl/orders/$orderId/items")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
@@ -306,6 +308,7 @@ class ApiClient(private val baseUrl: String) {
         body.put("menu_item_id", menuItemId)
         body.put("quantity", quantity)
         body.put("notes", notes)
+        unitPriceOverride?.let { body.put("unit_price", it) }
         connection.outputStream.use { os ->
             os.write(body.toString().toByteArray(Charsets.UTF_8))
             os.flush()
@@ -657,14 +660,14 @@ class RestaurantViewModel(
         }
     }
 
-    fun addItemToCurrentOrder(menuItem: MenuItem, notes: String = "") {
+    fun addItemToCurrentOrder(menuItem: MenuItem, notes: String = "", unitPriceOverride: Double? = null) {
         val existing = currentOrder.find { it.menuItem.id == menuItem.id && it.notes == notes }
         currentOrder = if (existing != null) {
             currentOrder.map {
                 if (it.menuItem.id == menuItem.id && it.notes == notes) it.copy(quantity = it.quantity + 1) else it
             }
         } else {
-            currentOrder + OrderItem(menuItem, 1, notes)
+            currentOrder + OrderItem(menuItem, 1, notes, unitPriceOverride)
         }
     }
 
@@ -728,9 +731,9 @@ class RestaurantViewModel(
         }
     }
 
-    fun addItemToExistingOrder(orderId: Int, menuItem: MenuItem, notes: String = "") {
+    fun addItemToExistingOrder(orderId: Int, menuItem: MenuItem, notes: String = "", unitPriceOverride: Double? = null) {
         viewModelScope.launch(Dispatchers.IO) {
-            apiClient.addItemToOrder(orderId, menuItem.id, 1, notes)
+            apiClient.addItemToOrder(orderId, menuItem.id, 1, notes, unitPriceOverride)
                 .onSuccess { loadOrders() }
                 .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al agregar item: ${error.message}" } }
         }
@@ -989,13 +992,15 @@ fun MenuCompletoDialog(
     item: MenuItem,
     platos: List<String>,
     guarniciones: List<String>,
-    onConfirm: (notas: String) -> Unit,
+    onConfirm: (notas: String, unitPriceOverride: Double?) -> Unit,
     onDismiss: () -> Unit,
-    showPlatos: Boolean = true
+    showPlatos: Boolean = true,
+    papasFritasItem: MenuItem? = null
 ) {
     val platoSeleccionado = remember { mutableStateOf<String?>(null) }
     val entradaSeleccionada = remember { mutableStateOf<String?>(null) }
     val guarnicionSeleccionada = remember { mutableStateOf<String?>(null) }
+    val papasFritasSeleccionadas = remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1070,6 +1075,29 @@ fun MenuCompletoDialog(
                         }
                     }
                 }
+                // Guarnición especial: Papas fritas
+                if (papasFritasItem != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            papasFritasSeleccionadas.value = !papasFritasSeleccionadas.value
+                        }.padding(vertical = 2.dp)
+                    ) {
+                        Checkbox(
+                            checked = papasFritasSeleccionadas.value,
+                            onCheckedChange = { papasFritasSeleccionadas.value = it }
+                        )
+                        Column {
+                            Text("Papas fritas", fontWeight = FontWeight.SemiBold)
+                            Text("+${formatCLP(papasFritasItem.price)}",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
             }
         },
         confirmButton = {
@@ -1078,7 +1106,10 @@ fun MenuCompletoDialog(
                 if (showPlatos) platoSeleccionado.value?.let { partes.add("Plato: $it") }
                 guarnicionSeleccionada.value?.let { partes.add("Guarnición: $it") }
                 entradaSeleccionada.value?.let { partes.add("Entrada: $it") }
-                onConfirm(partes.joinToString(" | "))
+                if (papasFritasSeleccionadas.value) partes.add("+ Papas fritas")
+                val priceOverride = if (papasFritasSeleccionadas.value && papasFritasItem != null)
+                    item.price + papasFritasItem.price else null
+                onConfirm(partes.joinToString(" | "), priceOverride)
             }) { Text("Agregar") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
@@ -1383,8 +1414,9 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
             platos = viewModel.platosDelDia,
             guarniciones = viewModel.guarnicionesDelDia,
             showPlatos = item.name != "Churrasco al plato",
-            onConfirm = { notas ->
-                viewModel.addItemToCurrentOrder(item, notas)
+            papasFritasItem = viewModel.menuItems.find { it.name == "Papas fritas guarnicion especial" },
+            onConfirm = { notas, priceOverride ->
+                viewModel.addItemToCurrentOrder(item, notas, priceOverride)
                 itemWithMenuCompleto = null
             },
             onDismiss = { itemWithMenuCompleto = null }
@@ -1953,8 +1985,10 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             item = item,
             platos = viewModel.platosDelDia,
             guarniciones = viewModel.guarnicionesDelDia,
-            onConfirm = { notas ->
-                viewModel.addItemToExistingOrder(currentOrder.orderId, item, notas)
+            showPlatos = item.name != "Churrasco al plato",
+            papasFritasItem = viewModel.menuItems.find { it.name == "Papas fritas guarnicion especial" },
+            onConfirm = { notas, priceOverride ->
+                viewModel.addItemToExistingOrder(currentOrder.orderId, item, notas, priceOverride)
                 itemWithMenuCompleto = null
             },
             onDismiss = { itemWithMenuCompleto = null }
