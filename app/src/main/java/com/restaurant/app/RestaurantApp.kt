@@ -112,6 +112,22 @@ data class HistorialEntry(
     val fechaGuardado: String
 )
 
+data class ItemDesglosado(
+    val id: String,           // único por fila: "${orderItemId}_${indice}"
+    val orderItemId: Int,
+    val name: String,
+    val unitPrice: Double,
+    val notes: String
+)
+
+data class PagoGrupo(
+    val numero: Int,
+    val items: List<ItemDesglosado>,
+    val subtotal: Double,
+    val propina: Double,
+    val total: Double
+)
+
 // ═══════════════════════════════════════════════════════════════
 // CLIENTE API REST
 // ═══════════════════════════════════════════════════════════════
@@ -426,6 +442,61 @@ class ApiClient(private val baseUrl: String) {
         connection.disconnect()
         JSONObject(response).optString("message", "OK")
     }
+    suspend fun printPagoDividido(
+        mesaLabel: String,
+        grupos: List<PagoGrupo>,
+        restaurantName: String,
+        footerText: String,
+        topMargin: Int = 0,
+        bottomMargin: Int = 0
+    ): Result<String> = runCatching {
+        val url = URL("$baseUrl/print/pago_dividido")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.doOutput = true
+        connection.connectTimeout = 5000
+        connection.readTimeout = 15000
+
+        val gruposArray = JSONArray()
+        grupos.forEach { grupo ->
+            val grupoJson = JSONObject()
+            grupoJson.put("numero", grupo.numero)
+            grupoJson.put("subtotal", grupo.subtotal)
+            grupoJson.put("propina", grupo.propina)
+            grupoJson.put("total", grupo.total)
+            val itemsArray = JSONArray()
+            grupo.items.forEach { item ->
+                val itemJson = JSONObject()
+                itemJson.put("name", item.name)
+                itemJson.put("unit_price", item.unitPrice)
+                itemJson.put("notes", item.notes)
+                itemsArray.put(itemJson)
+            }
+            grupoJson.put("items", itemsArray)
+            gruposArray.put(grupoJson)
+        }
+
+        val body = JSONObject()
+        body.put("mesa_label", mesaLabel)
+        body.put("grupos", gruposArray)
+        body.put("restaurant_name", restaurantName)
+        body.put("footer_text", footerText)
+        body.put("top_margin", topMargin)
+        body.put("bottom_margin", bottomMargin)
+
+        connection.outputStream.use { os ->
+            os.write(body.toString().toByteArray(Charsets.UTF_8))
+            os.flush()
+        }
+        val responseCode = connection.responseCode
+        val response = if (responseCode >= 400)
+            connection.errorStream.bufferedReader().readText()
+        else
+            connection.inputStream.bufferedReader().readText()
+        connection.disconnect()
+        JSONObject(response).optString("message", "OK")
+    }
 
 }
 
@@ -473,6 +544,67 @@ class RestaurantViewModel(
 
     var currentOrder by mutableStateOf(listOf<OrderItem>())
     var selectedTable by mutableStateOf<Table?>(null)
+
+    // ── Pago Dividido ──────────────────────────────────────────
+    var pagoDivididoActivo by mutableStateOf(false)
+    var itemsDesglosados by mutableStateOf(listOf<ItemDesglosado>())
+    var itemsPagados by mutableStateOf(setOf<String>())        // ids de ItemDesglosado ya cobrados
+    var itemsSeleccionados by mutableStateOf(setOf<String>())  // ids seleccionados en cobro actual
+    var gruposDePago by mutableStateOf(listOf<PagoGrupo>())
+    var pagoDivididoCompleto by mutableStateOf(false)
+
+    fun iniciarPagoDividido(order: Order) {
+        val desglosados = mutableListOf<ItemDesglosado>()
+        order.items.forEach { item ->
+            repeat(item.quantity) { idx ->
+                desglosados.add(ItemDesglosado(
+                    id = "${item.id}_$idx",
+                    orderItemId = item.id,
+                    name = item.name,
+                    unitPrice = item.unitPrice,
+                    notes = item.notes
+                ))
+            }
+        }
+        itemsDesglosados = desglosados
+        itemsPagados = emptySet()
+        itemsSeleccionados = emptySet()
+        gruposDePago = emptyList()
+        pagoDivididoCompleto = false
+        pagoDivididoActivo = true
+    }
+
+    fun toggleItemSeleccionado(id: String) {
+        itemsSeleccionados = if (id in itemsSeleccionados)
+            itemsSeleccionados - id else itemsSeleccionados + id
+    }
+
+    fun cobrarSeleccion() {
+        if (itemsSeleccionados.isEmpty()) return
+        val itemsCobrados = itemsDesglosados.filter { it.id in itemsSeleccionados }
+        val subtotal = itemsCobrados.sumOf { it.unitPrice }
+        val propina = subtotal * 0.10
+        val grupo = PagoGrupo(
+            numero = gruposDePago.size + 1,
+            items = itemsCobrados,
+            subtotal = subtotal,
+            propina = propina,
+            total = subtotal + propina
+        )
+        gruposDePago = gruposDePago + grupo
+        itemsPagados = itemsPagados + itemsSeleccionados
+        itemsSeleccionados = emptySet()
+        pagoDivididoCompleto = itemsPagados.size == itemsDesglosados.size
+    }
+
+    fun cerrarPagoDividido() {
+        pagoDivididoActivo = false
+        itemsDesglosados = emptyList()
+        itemsPagados = emptySet()
+        itemsSeleccionados = emptySet()
+        gruposDePago = emptyList()
+        pagoDivididoCompleto = false
+    }
 
     init {
         loadInitialData()
@@ -767,6 +899,18 @@ class RestaurantViewModel(
                 .onFailure { error ->
                     withContext(Dispatchers.Main) {
                         errorMessage = "Error al imprimir: ${error.message}"
+                    }
+                }
+        }
+    }
+    fun printPagoDividido(mesaLabel: String) {
+        val grupos = gruposDePago
+        if (grupos.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            apiClient.printPagoDividido(mesaLabel, grupos, restaurantName, footerText, topMargin, bottomMargin)
+                .onFailure { error ->
+                    withContext(Dispatchers.Main) {
+                        errorMessage = "Error al imprimir pago dividido: ${error.message}"
                     }
                 }
         }
@@ -1551,12 +1695,25 @@ fun MenuItemCard(item: MenuItem, onClick: () -> Unit) {
 fun OrdersScreen(viewModel: RestaurantViewModel) {
     var selectedOrder by remember { mutableStateOf<Order?>(null) }
     var selectedTab by remember { mutableStateOf(0) }
-    val selectedTerminadas = remember { mutableStateListOf<Int>() } // lista de orderId seleccionados
+    val selectedTerminadas =
+        remember { mutableStateListOf<Int>() } // lista de orderId seleccionados
     var modoSeleccion by remember { mutableStateOf(false) }
 
-    val activeOrders = viewModel.orders.filter { it.status in listOf("pending", "in_progress") && it.tableNumber != "Reserva" }.sortedByDescending { it.createdAt }
-    val reservaOrders = viewModel.orders.filter { it.tableNumber == "Reserva" && it.status in listOf("pending", "in_progress") }.sortedByDescending { it.createdAt }
-    val terminatedOrders = viewModel.orders.filter { it.status == "completed" }.sortedByDescending { it.createdAt }
+    val activeOrders = viewModel.orders.filter {
+        it.status in listOf(
+            "pending",
+            "in_progress"
+        ) && it.tableNumber != "Reserva"
+    }.sortedByDescending { it.createdAt }
+    val reservaOrders = viewModel.orders.filter {
+        it.tableNumber == "Reserva" && it.status in listOf(
+            "pending",
+            "in_progress"
+        )
+    }.sortedByDescending { it.createdAt }
+    val terminatedOrders =
+        viewModel.orders.filter { it.status == "completed" }.sortedByDescending { it.createdAt }
+
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -1591,11 +1748,14 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
         )
 
         TabRow(selectedTabIndex = selectedTab) {
-            Tab(selected = selectedTab == 0, onClick = { selectedTab = 0; selectedOrder = null },
+            Tab(
+                selected = selectedTab == 0, onClick = { selectedTab = 0; selectedOrder = null },
                 text = { Text("Activas (${activeOrders.size})") })
-            Tab(selected = selectedTab == 1, onClick = { selectedTab = 1; selectedOrder = null },
+            Tab(
+                selected = selectedTab == 1, onClick = { selectedTab = 1; selectedOrder = null },
                 text = { Text("Reservas (${reservaOrders.size})") })
-            Tab(selected = selectedTab == 2, onClick = { selectedTab = 2; selectedOrder = null },
+            Tab(
+                selected = selectedTab == 2, onClick = { selectedTab = 2; selectedOrder = null },
                 text = { Text("Terminadas (${terminatedOrders.size})") })
         }
 
@@ -1618,7 +1778,10 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
                     )
                 }
             } else {
-                LazyColumn(contentPadding = PaddingValues(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LazyColumn(
+                    contentPadding = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     items(ordersToShow) { order ->
                         if (selectedTab == 2 && modoSeleccion) {
                             val isSelected = order.orderId in selectedTerminadas
@@ -1693,12 +1856,14 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
     var modoEdicion by remember { mutableStateOf(false) }
     var itemWithOptions by remember { mutableStateOf<MenuItem?>(null) }
     var itemWithMenuCompleto by remember { mutableStateOf<MenuItem?>(null) }
+    var tabPagos by remember { mutableStateOf(0) } // 0=Detalle, 1=Pagos
 
     val currentOrder = viewModel.orders.find { it.orderId == order.orderId } ?: order
     val propina = currentOrder.total * 0.10
     val totalConPropina = currentOrder.total + propina
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
         Row(modifier = Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
@@ -1943,6 +2108,18 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                                 Text("Imprimir")
                             }
                         }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.iniciarPagoDividido(currentOrder)
+                                tabPagos = 0
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.CallSplit, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Pago dividido")
+                        }
                     }
 
                     if (currentOrder.status == "completed") {
@@ -1960,6 +2137,18 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Guardar")
                             }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.iniciarPagoDividido(currentOrder)
+                                tabPagos = 0
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.CallSplit, contentDescription = null)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Pago dividido")
                         }
                     }
                 }
@@ -2012,7 +2201,247 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancelar") } }
         )
     }
+
+        // Pantalla de Pago Dividido superpuesta dentro del Box
+        if (viewModel.pagoDivididoActivo) {
+            PagoDivididoScreen(
+                viewModel = viewModel,
+                mesaLabel = currentOrder.tableNumber,
+                onCerrar = { viewModel.cerrarPagoDividido() }
+            )
+        }
+    } // cierre Box
+} // cierre fun OrderDetail
+
+// ═══════════════════════════════════════════════════════════════
+// PANTALLA PAGO DIVIDIDO
+// ═══════════════════════════════════════════════════════════════
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PagoDivididoScreen(
+    viewModel: RestaurantViewModel,
+    mesaLabel: String,
+    onCerrar: () -> Unit
+) {
+    var tabSeleccionada by remember { mutableStateOf(0) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+        // TopAppBar
+        TopAppBar(
+            title = { Text("Pago dividido — Mesa $mesaLabel") },
+            navigationIcon = {
+                IconButton(onClick = onCerrar) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cerrar")
+                }
+            }
+        )
+
+        // Pestañas
+        TabRow(selectedTabIndex = tabSeleccionada) {
+            Tab(selected = tabSeleccionada == 0, onClick = { tabSeleccionada = 0 },
+                text = { Text("Detalle") })
+            Tab(selected = tabSeleccionada == 1, onClick = { tabSeleccionada = 1 },
+                text = { Text("Pagos (${viewModel.gruposDePago.size})") })
+        }
+
+        when (tabSeleccionada) {
+            0 -> {
+                // ── Pestaña Detalle ──
+                Column(modifier = Modifier.fillMaxSize()) {
+
+                    // Botón Cobrar selección
+                    Button(
+                        onClick = {
+                            viewModel.cobrarSeleccion()
+                            if (viewModel.pagoDivididoCompleto) tabSeleccionada = 1
+                        },
+                        enabled = viewModel.itemsSeleccionados.isNotEmpty(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                    ) {
+                        Icon(Icons.Default.AttachMoney, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Cobrar selección (${viewModel.itemsSeleccionados.size} items)")
+                    }
+
+                    // Aviso pago completado
+                    if (viewModel.pagoDivididoCompleto) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("✓ Pago completado — todos los items cobrados",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            }
+                        }
+                    }
+
+                    // Lista de items desglosados
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(viewModel.itemsDesglosados) { item ->
+                            val pagado = item.id in viewModel.itemsPagados
+                            val seleccionado = item.id in viewModel.itemsSeleccionados
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = when {
+                                        pagado -> MaterialTheme.colorScheme.surfaceVariant
+                                        seleccionado -> MaterialTheme.colorScheme.secondaryContainer
+                                        else -> MaterialTheme.colorScheme.surface
+                                    }
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = item.name,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (pagado)
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            else
+                                                MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (item.notes.isNotEmpty()) {
+                                            Text(
+                                                text = item.notes,
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Text(
+                                            text = formatCLP(item.unitPrice),
+                                            fontSize = 13.sp,
+                                            color = if (pagado)
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            else
+                                                MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Checkbox(
+                                        checked = seleccionado,
+                                        onCheckedChange = {
+                                            if (!pagado) viewModel.toggleItemSeleccionado(item.id)
+                                        },
+                                        enabled = !pagado
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            1 -> {
+                // ── Pestaña Pagos ──
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (viewModel.gruposDePago.isEmpty()) {
+                        item {
+                            Text(
+                                "Aún no hay pagos registrados.",
+                                modifier = Modifier.padding(top = 24.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontStyle = FontStyle.Italic
+                            )
+                        }
+                    } else {
+                        items(viewModel.gruposDePago) { grupo ->
+                            Card(modifier = Modifier.fillMaxWidth()) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Text(
+                                        "Pago ${grupo.numero}",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 16.sp
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    grupo.items.forEach { item ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(item.name, modifier = Modifier.weight(1f), fontSize = 14.sp)
+                                            Text(formatCLP(item.unitPrice), fontSize = 14.sp)
+                                        }
+                                        if (item.notes.isNotEmpty()) {
+                                            Text(
+                                                item.notes,
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    HorizontalDivider()
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Row(modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text("Subtotal:", fontSize = 13.sp)
+                                        Text(formatCLP(grupo.subtotal), fontSize = 13.sp)
+                                    }
+                                    Row(modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text("Propina (10%):", fontSize = 13.sp)
+                                        Text(formatCLP(grupo.propina), fontSize = 13.sp)
+                                    }
+                                    Row(modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text("Total:", fontWeight = FontWeight.Bold)
+                                        Text(formatCLP(grupo.total), fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Button(
+                                onClick = { viewModel.printPagoDividido(mesaLabel) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.Print, contentDescription = null)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Imprimir resumen")
+                            }
+                            Spacer(modifier = Modifier.height(16.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
+
 
 // ═══════════════════════════════════════════════════════════════
 // PANTALLA HISTORIAL
