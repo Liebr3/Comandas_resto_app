@@ -847,8 +847,11 @@ class RestaurantViewModel(
 
     fun saveOrderWithNotes(table: Table, reservaNotas: String) {
         if (currentOrder.isEmpty()) return
-        val orderConNotas = currentOrder.map {
-            it.copy(notes = if (it.notes.isBlank()) reservaNotas else "${it.notes} | $reservaNotas")
+        val orderConNotas = currentOrder.mapIndexed { idx, item ->
+            if (idx == 0)
+                item.copy(notes = if (item.notes.isBlank()) reservaNotas else "${item.notes}##NOTA_RESERVA_HEADER##$reservaNotas")
+            else
+                item  // otros items sin modificar
         }
         viewModelScope.launch(Dispatchers.IO) {
             withContext(Dispatchers.Main) { isLoading = true; errorMessage = null }
@@ -1338,8 +1341,11 @@ fun ReservaDialog(
                 if (hora.isNotBlank()) partes.add("Hora: $hora")
                 if (personas.isNotBlank()) partes.add("Personas: $personas")
                 if (nombre.isNotBlank()) partes.add("Reserva: $nombre")
-                if (notas.isNotBlank()) partes.add("Notas: $notas")
-                onConfirm(partes.joinToString(" | "))
+                val notaBase = partes.joinToString(" | ")
+                val notaFinal = if (notas.isNotBlank())
+                    "$notaBase##NOTA_RESERVA##$notas"
+                else notaBase
+                onConfirm(notaFinal)
             }) { Text("Confirmar") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
