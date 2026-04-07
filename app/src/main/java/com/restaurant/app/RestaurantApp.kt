@@ -139,7 +139,8 @@ data class ConfigDia(
     val footerText: String,
     val topMargin: Int,
     val bottomMargin: Int,
-    val claveSeguridad: String
+    val claveSeguridad: String,
+    val menuExtra: String
 )
 
 class ApiClient(private val baseUrl: String) {
@@ -407,7 +408,8 @@ class ApiClient(private val baseUrl: String) {
         val topMargin      = data.optInt("top_margin", 0)
         val bottomMargin   = data.optInt("bottom_margin", 0)
         val claveSeguridad = data.optString("clave_seguridad", "1234")
-        ConfigDia(platos, guarniciones, restaurantName, footerText, topMargin, bottomMargin, claveSeguridad)
+        val menuExtra      = data.optString("menu_extra", "")
+        ConfigDia(platos, guarniciones, restaurantName, footerText, topMargin, bottomMargin, claveSeguridad, menuExtra)
     }
 
     suspend fun setConfigDia(
@@ -417,7 +419,8 @@ class ApiClient(private val baseUrl: String) {
         footerText: String = "",
         topMargin: Int = -1,
         bottomMargin: Int = -1,
-        claveSeguridad: String = ""
+        claveSeguridad: String = "",
+        menuExtra: String = ""
     ): Result<String> = runCatching {
         val url = URL("$baseUrl/config/dia")
         val connection = url.openConnection() as HttpURLConnection
@@ -434,6 +437,7 @@ class ApiClient(private val baseUrl: String) {
         if (topMargin >= 0) body.put("top_margin", topMargin)
         if (bottomMargin >= 0) body.put("bottom_margin", bottomMargin)
         if (claveSeguridad.isNotEmpty()) body.put("clave_seguridad", claveSeguridad)
+        if (menuExtra.isNotEmpty()) body.put("menu_extra", menuExtra)
         connection.outputStream.use { os ->
             os.write(body.toString().toByteArray(Charsets.UTF_8))
             os.flush()
@@ -524,6 +528,7 @@ class RestaurantViewModel(
 
     // Platos configurables del día
     var platosDelDia by mutableStateOf(listOf<String>())
+    var menuExtraDelDia by mutableStateOf("")
 
     // Configuración de impresión
     var restaurantName by mutableStateOf("Mi Restaurante")
@@ -646,6 +651,7 @@ class RestaurantViewModel(
                         topMargin       = config.topMargin
                         bottomMargin    = config.bottomMargin
                         if (config.claveSeguridad.isNotEmpty()) claveSeguridad = config.claveSeguridad
+                        if (config.menuExtra.isNotEmpty()) menuExtraDelDia = config.menuExtra
                     }
                     dataStore.edit {
                         it[PrefKeys.PLATOS_DEL_DIA]      = config.platos.joinToString("|")
@@ -684,6 +690,7 @@ class RestaurantViewModel(
                     val rtop    = json.optInt("top_margin", -1)
                     val rbottom = json.optInt("bottom_margin", -1)
                     val rclave  = json.optString("clave_seguridad", "")
+                    val rmenuExtra = json.optString("menu_extra", "")
                     withContext(Dispatchers.Main) {
                         platosDelDia       = platos
                         guarnicionesDelDia = guarniciones
@@ -692,6 +699,7 @@ class RestaurantViewModel(
                         if (rtop >= 0)    topMargin    = rtop
                         if (rbottom >= 0) bottomMargin = rbottom
                         if (rclave.isNotEmpty()) claveSeguridad  = rclave
+                        if (rmenuExtra.isNotEmpty()) menuExtraDelDia = rmenuExtra
                     }
                     dataStore.edit {
                         it[PrefKeys.PLATOS_DEL_DIA]       = platos.joinToString("|")
@@ -707,6 +715,13 @@ class RestaurantViewModel(
                 kotlinx.coroutines.delay(10_000)
                 startConfigStream(baseUrl)
             }
+        }
+    }
+
+    fun saveMenuExtra(texto: String) {
+        menuExtraDelDia = texto
+        viewModelScope.launch(Dispatchers.IO) {
+            apiClient.setConfigDia(platosDelDia, guarnicionesDelDia, menuExtra = texto)
         }
     }
 
@@ -938,8 +953,10 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
     "limonada" to listOf("Azúcar", "Endulzante"),
     "limonada menta/jengibre" to listOf("Azúcar", "Endulzante"),
     "Mojito frutal" to listOf("Frambuesa", "Frutilla", "Mango", "Piña"),
-    "Churrasca 1 agregado" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo"),
-    "Churrasca 2 agregados" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo"),
+    "Churrasca 1 agregado" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo", "Mantequilla"),
+    "Churrasca 2 agregados" to listOf("Ave", "Palta", "Jamón", "Queso", "Mayo", "Tomate", "Huevo", "Mantequilla"),
+    "Crepes 1 ingrediente" to listOf("Champiñón", "Choclo", "Pollo", "Pimentón", "Jamón", "Aceitunas", "Espinaca"),
+    "Crepes 2 ingredientes" to listOf("Champiñón", "Choclo", "Pollo", "Pimentón", "Jamón", "Aceitunas", "Espinaca"),
     "bebida lata" to listOf("Coca Cola", "Coca Zero", "Kem Piña", "Limón Soda", "Bilz", "Pap", "Canada Dry"),
     "Cafe Bombon" to listOf("Sin Lactosa", "Descafeinado"),
     "Cafe con leche" to listOf("Sin Lactosa", "Descafeinado"),
@@ -957,7 +974,8 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
     "Mokaccino" to listOf("Sin Lactosa", "Descafeinado"),
     "Mokaccino doble" to listOf("Sin Lactosa", "Descafeinado")
 )
-
+val ITEMS_CON_DULCE = setOf("jugo natural", "jugo natural tropical")
+val OPCIONES_DULCE = listOf("Azúcar", "Endulzante")
 // Productos que usan el diálogo de Menú completo (entrada + guarnición)
 val ITEMS_CON_MENU = listOf("Menu normal", "Menu Extra", "Churrasco al plato")
 
@@ -1540,22 +1558,46 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
         }
     }
 
+    var notasJugoPendiente by remember { mutableStateOf<Pair<MenuItem, String>?>(null) }
+
     itemWithOptions?.let { item ->
         ItemOptionsDialog(
             item = item,
             options = ITEM_OPTIONS[item.name] ?: emptyList(),
             onConfirm = { selectedOptions ->
-                viewModel.addItemToCurrentOrder(item, selectedOptions)
+                if (item.name in ITEMS_CON_DULCE) {
+                    notasJugoPendiente = Pair(item, selectedOptions)
+                } else {
+                    viewModel.addItemToCurrentOrder(item, selectedOptions)
+                }
                 itemWithOptions = null
             },
             onDismiss = { itemWithOptions = null }
         )
     }
 
+    notasJugoPendiente?.let { (item, notasPrevias) ->
+        ItemOptionsDialog(
+            item = item.copy(name = "¿Con azúcar o endulzante?"),
+            options = OPCIONES_DULCE,
+            onConfirm = { dulce ->
+                val notasFinal = if (dulce.isNotEmpty()) "$notasPrevias | $dulce" else notasPrevias
+                viewModel.addItemToCurrentOrder(item, notasFinal)
+                notasJugoPendiente = null
+            },
+            onDismiss = {
+                viewModel.addItemToCurrentOrder(item, notasPrevias)
+                notasJugoPendiente = null
+            }
+        )
+    }
+
     itemWithMenuCompleto?.let { item ->
         MenuCompletoDialog(
             item = item,
-            platos = viewModel.platosDelDia,
+            platos = if (item.name == "Menu Extra")
+                listOf(viewModel.menuExtraDelDia).filter { it.isNotEmpty() }
+            else viewModel.platosDelDia,
             guarniciones = viewModel.guarnicionesDelDia,
             showPlatos = item.name != "Churrasco al plato",
             papasFritasItem = viewModel.menuItems.find { it.name == "Papas fritas guarnicion especial" },
@@ -2156,33 +2198,57 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
         }
     }
 
-    // Diálogos en modo edición
-    itemWithOptions?.let { item ->
-        ItemOptionsDialog(
-            item = item,
-            options = ITEM_OPTIONS[item.name] ?: emptyList(),
-            onConfirm = { selectedOptions ->
-                viewModel.addItemToExistingOrder(currentOrder.orderId, item, selectedOptions)
-                itemWithOptions = null
-            },
-            onDismiss = { itemWithOptions = null }
-        )
-    }
+        // Diálogos en modo edición
+        var notasJugoPendiente by remember { mutableStateOf<Pair<MenuItem, String>?>(null) }
 
-    itemWithMenuCompleto?.let { item ->
-        MenuCompletoDialog(
-            item = item,
-            platos = viewModel.platosDelDia,
-            guarniciones = viewModel.guarnicionesDelDia,
-            showPlatos = item.name != "Churrasco al plato",
-            papasFritasItem = viewModel.menuItems.find { it.name == "Papas fritas guarnicion especial" },
-            onConfirm = { notas, priceOverride ->
-                viewModel.addItemToExistingOrder(currentOrder.orderId, item, notas, priceOverride)
-                itemWithMenuCompleto = null
-            },
-            onDismiss = { itemWithMenuCompleto = null }
-        )
-    }
+        itemWithOptions?.let { item ->
+            ItemOptionsDialog(
+                item = item,
+                options = ITEM_OPTIONS[item.name] ?: emptyList(),
+                onConfirm = { selectedOptions ->
+                    if (item.name in ITEMS_CON_DULCE) {
+                        notasJugoPendiente = Pair(item, selectedOptions)
+                    } else {
+                        viewModel.addItemToExistingOrder(currentOrder.orderId, item, selectedOptions)
+                    }
+                    itemWithOptions = null
+                },
+                onDismiss = { itemWithOptions = null }
+            )
+        }
+
+        notasJugoPendiente?.let { (item, notasPrevias) ->
+            ItemOptionsDialog(
+                item = item.copy(name = "¿Con azúcar o endulzante?"),
+                options = OPCIONES_DULCE,
+                onConfirm = { dulce ->
+                    val notasFinal = if (dulce.isNotEmpty()) "$notasPrevias | $dulce" else notasPrevias
+                    viewModel.addItemToExistingOrder(currentOrder.orderId, item, notasFinal)
+                    notasJugoPendiente = null
+                },
+                onDismiss = {
+                    viewModel.addItemToExistingOrder(currentOrder.orderId, item, notasPrevias)
+                    notasJugoPendiente = null
+                }
+            )
+        }
+
+        itemWithMenuCompleto?.let { item ->
+            MenuCompletoDialog(
+                item = item,
+                platos = if (item.name == "Menu Extra")
+                    listOf(viewModel.menuExtraDelDia).filter { it.isNotEmpty() }
+                else viewModel.platosDelDia,
+                guarniciones = viewModel.guarnicionesDelDia,
+                showPlatos = item.name != "Churrasco al plato",
+                papasFritasItem = viewModel.menuItems.find { it.name == "Papas fritas guarnicion especial" },
+                onConfirm = { notas, priceOverride ->
+                    viewModel.addItemToExistingOrder(currentOrder.orderId, item, notas, priceOverride)
+                    itemWithMenuCompleto = null
+                },
+                onDismiss = { itemWithMenuCompleto = null }
+            )
+        }
 
     if (showDeleteConfirm) {
         AlertDialog(
@@ -2836,6 +2902,44 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
                         viewModel.platosDelDia.forEach { p ->
                             Text("• $p", fontSize = 13.sp)
                         }
+                    }
+                }
+            }
+        }
+
+        item {
+            var menuExtraInput by remember { mutableStateOf(viewModel.menuExtraDelDia) }
+            var menuExtraSaved by remember { mutableStateOf(false) }
+            LaunchedEffect(viewModel.menuExtraDelDia) {
+                if (!menuExtraSaved) menuExtraInput = viewModel.menuExtraDelDia
+            }
+            Card(modifier = Modifier.padding(16.dp)) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Menú extra", fontWeight = FontWeight.Bold)
+                    Text("Nombre del plato de fondo del Menú Extra de hoy.",
+                        fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = menuExtraInput,
+                        onValueChange = { menuExtraInput = it; menuExtraSaved = false },
+                        label = { Text("Plato de fondo Menú Extra") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            viewModel.saveMenuExtra(menuExtraInput.trim())
+                            menuExtraSaved = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (menuExtraSaved) "✓ Menú extra guardado" else "Guardar Menú extra")
+                    }
+                    if (viewModel.menuExtraDelDia.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Hoy: ${viewModel.menuExtraDelDia}", fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold)
                     }
                 }
             }
