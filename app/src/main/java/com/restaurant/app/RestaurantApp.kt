@@ -1918,16 +1918,14 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             }
             Text("Orden #${currentOrder.orderId}", fontSize = 20.sp, fontWeight = FontWeight.Bold,
                 modifier = Modifier.weight(1f))
-            // Botón editar solo disponible en estado in_progress
-            if (currentOrder.status == "in_progress" && !isTerminada) {
-                IconButton(onClick = { modoEdicion = !modoEdicion }) {
-                    Icon(
-                        if (modoEdicion) Icons.Default.Check else Icons.Default.Edit,
-                        contentDescription = if (modoEdicion) "Finalizar edición" else "Editar comanda",
-                        tint = if (modoEdicion) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.onSurface
-                    )
-                }
+            // Botón editar disponible en todos los estados
+            IconButton(onClick = { modoEdicion = !modoEdicion }) {
+                Icon(
+                    if (modoEdicion) Icons.Default.Check else Icons.Default.Edit,
+                    contentDescription = if (modoEdicion) "Finalizar edición" else "Editar comanda",
+                    tint = if (modoEdicion) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface
+                )
             }
         }
 
