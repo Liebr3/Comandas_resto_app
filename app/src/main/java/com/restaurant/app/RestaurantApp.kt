@@ -1594,9 +1594,31 @@ fun ReservaDialog(
 // ═══════════════════════════════════════════════════════════════
 // PANTALLA MENÚ
 // ═══════════════════════════════════════════════════════════════
-
+val CATEGORIAS_ORDEN = listOf(
+    "Menus Diarios" to "⭐",
+    "refrescos"     to "🥤",
+    "cafes"         to "☕",
+    "Fajitas"       to "🌮",
+    "helados"       to "🍨",
+    "Pizzas"        to "🍕",
+    "Dulces"        to "🍰",
+    "Sandwiches"    to "🥪",
+    "aperitivos"    to "🍸",
+    "cervezas"      to "🍺",
+    "Crepes"        to "🥞",
+    "Desayuno"      to "🍳",
+    "El Huerto"     to "🥗",
+    "extras"        to "➕",
+    "Ingrediente extra" to "🧂",
+    "papas fritas"  to "🍟",
+    "tablas"        to "🪵",
+    "Te"            to "🍵"
+)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+
+
+
 fun MenuScreen(viewModel: RestaurantViewModel) {
     var showTableSelector by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -1774,28 +1796,143 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
             }
         }
 
-        val itemsByCategory = filteredItems.groupBy { it.category }
+        var categoriaSeleccionada by remember { mutableStateOf<String?>(null) }
 
-        LazyColumn(
-            modifier = Modifier.weight(1f),
-            contentPadding = PaddingValues(8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            itemsByCategory.forEach { (category, _) ->
-                item {
-                    Text(text = category, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(vertical = 8.dp))
-                }
-                items(filteredItems.filter { it.category == category }) { item ->
+        // Si hay búsqueda activa, mostrar resultados directamente sin grid
+        if (searchQuery.isNotBlank()) {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(filteredItems) { item ->
                     MenuItemCard(item) {
                         when {
-                            ITEMS_CON_MENU.any { it.equals(item.name, ignoreCase = true) } -> {
-                                itemWithMenuCompleto = item
-                            }
-                            ITEM_OPTIONS.containsKey(item.name) -> {
-                                itemWithOptions = item
-                            }
+                            ITEMS_CON_MENU.any { it.equals(item.name, ignoreCase = true) } -> itemWithMenuCompleto = item
+                            ITEM_OPTIONS.containsKey(item.name) -> itemWithOptions = item
                             else -> viewModel.addItemToCurrentOrder(item)
+                        }
+                    }
+                }
+            }
+        } else if (categoriaSeleccionada == null) {
+            // ── GRID DE CATEGORÍAS ──
+            val categoriasDisponibles = CATEGORIAS_ORDEN.filter { (cat, _) ->
+                viewModel.menuItems.any { it.category.equals(cat, ignoreCase = true) }
+            }
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(8.dp)
+            ) {
+                items(categoriasDisponibles.chunked(2)) { fila ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        fila.forEach { (cat, icono) ->
+                            Card(
+                                modifier = Modifier.weight(1f).height(90.dp).clickable {
+                                    categoriaSeleccionada = cat
+                                },
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (cat == "Menus Diarios")
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    else
+                                        MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Text(icono, fontSize = 28.sp)
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        cat,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                        // Si la fila tiene solo 1 elemento, agregar espacio vacío
+                        if (fila.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        } else {
+            // ── SUBMENU DE ITEMS DE LA CATEGORÍA ──
+            val itemsCategoria = viewModel.menuItems.filter {
+                it.category.equals(categoriaSeleccionada, ignoreCase = true)
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                // Botón volver
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { categoriaSeleccionada = null }
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver",
+                        tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        CATEGORIAS_ORDEN.find { it.first.equals(categoriaSeleccionada, ignoreCase = true) }
+                            ?.let { "${it.second} ${it.first}" } ?: categoriaSeleccionada ?: "",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                HorizontalDivider()
+                LazyColumn(
+                    contentPadding = PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(itemsCategoria.chunked(2)) { fila ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            fila.forEach { item ->
+                                Card(
+                                    modifier = Modifier.weight(1f).clickable {
+                                        when {
+                                            ITEMS_CON_MENU.any { it.equals(item.name, ignoreCase = true) } -> itemWithMenuCompleto = item
+                                            ITEM_OPTIONS.containsKey(item.name) -> itemWithOptions = item
+                                            else -> viewModel.addItemToCurrentOrder(item)
+                                        }
+                                    },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            item.name,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            formatCLP(item.price),
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.primary,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+                                }
+                            }
+                            if (fila.size == 1) Spacer(modifier = Modifier.weight(1f))
                         }
                     }
                 }
