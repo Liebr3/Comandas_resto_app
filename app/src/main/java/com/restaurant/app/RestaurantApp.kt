@@ -1,5 +1,7 @@
 package com.restaurant.app
 
+
+
 import android.os.Bundle
 import android.content.Intent
 import android.content.Context
@@ -38,6 +40,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.ViewModelProvider
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
+import androidx.work.Constraints
+import androidx.work.NetworkType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -59,7 +69,40 @@ object PrefKeys {
     val FOOTER_TEXT          = stringPreferencesKey("footer_text")
     val TOP_MARGIN           = stringPreferencesKey("top_margin")
     val BOTTOM_MARGIN        = stringPreferencesKey("bottom_margin")
+    val COLA_OFFLINE         = stringPreferencesKey("cola_offline")
 }
+
+// ═══════════════════════════════════════════════════════════════
+// COLA OFFLINE
+// ═══════════════════════════════════════════════════════════════
+
+enum class TipoOperacion {
+    CREAR_COMANDA,
+    ACTUALIZAR_ESTADO,
+    ASIGNAR_MESA,
+    AGREGAR_ITEM,
+    ELIMINAR_ITEM
+}
+
+data class OperacionPendiente(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val tipo: TipoOperacion,
+    val payload: String  // JSON serializado con los parámetros
+)
+
+// Serialización simple a JSON
+fun OperacionPendiente.toJson(): JSONObject = JSONObject().apply {
+    put("id", id)
+    put("tipo", tipo.name)
+    put("payload", payload)
+}
+
+fun operacionPendienteFromJson(json: JSONObject) = OperacionPendiente(
+    id      = json.getString("id"),
+    tipo    = TipoOperacion.valueOf(json.getString("tipo")),
+    payload = json.getString("payload")
+)
+
 
 // ═══════════════════════════════════════════════════════════════
 // MODELOS DE DATOS
@@ -145,6 +188,22 @@ data class ConfigDia(
 
 class ApiClient(private val baseUrl: String) {
 
+    private suspend fun <T> withRetry(
+        attempts: Int = 3,
+        delayMs: Long = 2000,
+        block: suspend () -> T
+    ): T {
+        var lastException: Exception? = null
+        repeat(attempts) { attempt ->
+            try {
+                return block()
+            } catch (e: Exception) {
+                lastException = e
+                if (attempt < attempts - 1) kotlinx.coroutines.delay(delayMs)
+            }
+        }
+        throw lastException!!
+    }
     suspend fun getMenu(): Result<List<MenuItem>> = runCatching {
         android.util.Log.d("API_DEBUG", "Intentando conectar a: $baseUrl/menu")
         val url = URL("$baseUrl/menu")
@@ -193,8 +252,9 @@ class ApiClient(private val baseUrl: String) {
     }
 
     suspend fun createOrder(tableId: Int, items: List<OrderItem>): Result<String> = runCatching {
-        android.util.Log.d("API_DEBUG", "Creando comanda para mesa $tableId")
-        val url = URL("$baseUrl/orders")
+        withRetry {
+            android.util.Log.d("API_DEBUG", "Creando comanda para mesa $tableId")
+            val url = URL("$baseUrl/orders")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.setRequestProperty("Content-Type", "application/json")
@@ -225,7 +285,8 @@ class ApiClient(private val baseUrl: String) {
         }
         connection.disconnect()
         val json = JSONObject(response)
-        json.optString("message", json.optString("error", "Sin respuesta"))
+            json.optString("message", json.optString("error", "Sin respuesta"))
+        } // cierra withRetry
     }.also { result ->
         result.onFailure { android.util.Log.e("API_DEBUG", "FALLO en createOrder: ${it::class.simpleName}: ${it.message}") }
     }
@@ -266,9 +327,10 @@ class ApiClient(private val baseUrl: String) {
     }
 
     suspend fun updateOrderStatus(orderId: Int, status: String): Result<String> = runCatching {
-        val url = URL("$baseUrl/orders/$orderId")
-        val connection = url.openConnection() as HttpURLConnection
-        connection.requestMethod = "PATCH"
+        withRetry {
+            val url = URL("$baseUrl/orders/$orderId")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "PATCH"
         connection.setRequestProperty("Content-Type", "application/json")
         connection.setRequestProperty("X-HTTP-Method-Override", "PATCH")
         connection.doOutput = true
@@ -283,15 +345,17 @@ class ApiClient(private val baseUrl: String) {
         val response = connection.inputStream.bufferedReader().readText()
         connection.disconnect()
         val json = JSONObject(response)
-        json.getString("message")
+            json.getString("message")
+        } // cierra withRetry
     }
 
     suspend fun assignTableAndStart(orderId: Int, tableId: Int): Result<String> = runCatching {
-        val url = URL("$baseUrl/orders/$orderId")
-        val connection = url.openConnection() as HttpURLConnection
-        connection.requestMethod = "PATCH"
-        connection.setRequestProperty("Content-Type", "application/json")
-        connection.setRequestProperty("X-HTTP-Method-Override", "PATCH")
+        withRetry {
+            val url = URL("$baseUrl/orders/$orderId")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "PATCH"
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("X-HTTP-Method-Override", "PATCH")
         connection.doOutput = true
         connection.connectTimeout = 5000
         connection.readTimeout = 5000
@@ -310,11 +374,37 @@ class ApiClient(private val baseUrl: String) {
         }
         connection.disconnect()
         val json = JSONObject(response)
-        json.optString("message", json.optString("error", "Sin respuesta"))
+            json.optString("message", json.optString("error", "Sin respuesta"))
+        } // cierra withRetry
+    }
+
+    suspend fun reassignTable(orderId: Int, tableId: Int): Result<String> = runCatching {
+        val url = URL("$baseUrl/orders/$orderId")
+        val connection = url.openConnection() as HttpURLConnection
+        connection.requestMethod = "PATCH"
+        connection.setRequestProperty("Content-Type", "application/json")
+        connection.setRequestProperty("X-HTTP-Method-Override", "PATCH")
+        connection.doOutput = true
+        connection.connectTimeout = 5000
+        connection.readTimeout = 5000
+        val body = JSONObject()
+        body.put("table_id", tableId)
+        connection.outputStream.use { os ->
+            os.write(body.toString().toByteArray(Charsets.UTF_8))
+            os.flush()
+        }
+        val responseCode = connection.responseCode
+        val response = if (responseCode >= 400)
+            connection.errorStream.bufferedReader().readText()
+        else
+            connection.inputStream.bufferedReader().readText()
+        connection.disconnect()
+        JSONObject(response).optString("message", JSONObject(response).optString("error", "Sin respuesta"))
     }
 
     suspend fun addItemToOrder(orderId: Int, menuItemId: Int, quantity: Int, notes: String, unitPriceOverride: Double? = null): Result<String> = runCatching {
-        val url = URL("$baseUrl/orders/$orderId/items")
+        withRetry {
+            val url = URL("$baseUrl/orders/$orderId/items")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
         connection.setRequestProperty("Content-Type", "application/json")
@@ -338,11 +428,13 @@ class ApiClient(private val baseUrl: String) {
         }
         connection.disconnect()
         val json = JSONObject(response)
-        json.optString("message", json.optString("error", "Sin respuesta"))
+            json.optString("message", json.optString("error", "Sin respuesta"))
+        } // cierra withRetry
     }
 
     suspend fun removeItemFromOrder(orderId: Int, itemId: Int): Result<String> = runCatching {
-        val url = URL("$baseUrl/orders/$orderId/items/$itemId")
+        withRetry {
+            val url = URL("$baseUrl/orders/$orderId/items/$itemId")
         val connection = url.openConnection() as HttpURLConnection
         connection.requestMethod = "DELETE"
         connection.connectTimeout = 5000
@@ -355,7 +447,8 @@ class ApiClient(private val baseUrl: String) {
         }
         connection.disconnect()
         val json = JSONObject(response)
-        json.optString("message", json.optString("error", "Sin respuesta"))
+            json.optString("message", json.optString("error", "Sin respuesta"))
+        } // cierra withRetry
     }
 
     suspend fun printOrder(orderId: Int, orderStatus: String, restaurantName: String, footerText: String, topMargin: Int = 0, bottomMargin: Int = 0): Result<String> = runCatching {
@@ -510,7 +603,8 @@ class ApiClient(private val baseUrl: String) {
 
 class RestaurantViewModel(
     private val apiClient: ApiClient,
-    private val dataStore: DataStore<Preferences>
+    private val dataStore: DataStore<Preferences>,
+    private val contextoApp: android.content.Context
 ) : ViewModel() {
 
     var isLoading by mutableStateOf(false)
@@ -600,6 +694,18 @@ class RestaurantViewModel(
         itemsPagados = itemsPagados + itemsSeleccionados
         itemsSeleccionados = emptySet()
         pagoDivididoCompleto = itemsPagados.size == itemsDesglosados.size
+    }
+
+    fun reassignTable(orderId: Int, tableId: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            apiClient.reassignTable(orderId, tableId)
+                .onSuccess { loadOrders() }
+                .onFailure { error ->
+                    withContext(Dispatchers.Main) {
+                        errorMessage = "Error al reasignar mesa: ${error.message}"
+                    }
+                }
+        }
     }
 
     fun cerrarPagoDividido() {
@@ -840,7 +946,26 @@ class RestaurantViewModel(
                     withContext(Dispatchers.Main) { currentOrder = listOf(); selectedTable = null }
                     loadOrders()
                 }
-                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al crear comanda: ${error.message}" } }
+                .onFailure {
+                    // Encolar para reintento cuando vuelva la red
+                    val payload = JSONObject().apply {
+                        put("table_id", table.id)
+                        val arr = JSONArray()
+                        currentOrder.forEach { item ->
+                            arr.put(JSONObject().apply {
+                                put("menu_item_id", item.menuItem.id)
+                                put("quantity", item.quantity)
+                                put("notes", item.notes)
+                            })
+                        }
+                        put("items", arr)
+                    }.toString()
+                    encolarOperacion(OperacionPendiente(tipo = TipoOperacion.CREAR_COMANDA, payload = payload))
+                    withContext(Dispatchers.Main) {
+                        currentOrder = listOf()
+                        selectedTable = null
+                    }
+                }
             withContext(Dispatchers.Main) { isLoading = false }
         }
     }
@@ -869,7 +994,13 @@ class RestaurantViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             apiClient.updateOrderStatus(orderId, status)
                 .onSuccess { loadOrders() }
-                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al actualizar: ${error.message}" } }
+                .onFailure {
+                    val payload = JSONObject().apply {
+                        put("order_id", orderId)
+                        put("status", status)
+                    }.toString()
+                    encolarOperacion(OperacionPendiente(tipo = TipoOperacion.ACTUALIZAR_ESTADO, payload = payload))
+                }
         }
     }
 
@@ -877,7 +1008,13 @@ class RestaurantViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             apiClient.assignTableAndStart(orderId, tableId)
                 .onSuccess { loadOrders() }
-                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al asignar mesa: ${error.message}" } }
+                .onFailure {
+                    val payload = JSONObject().apply {
+                        put("order_id", orderId)
+                        put("table_id", tableId)
+                    }.toString()
+                    encolarOperacion(OperacionPendiente(tipo = TipoOperacion.ASIGNAR_MESA, payload = payload))
+                }
         }
     }
 
@@ -885,7 +1022,16 @@ class RestaurantViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             apiClient.addItemToOrder(orderId, menuItem.id, 1, notes, unitPriceOverride)
                 .onSuccess { loadOrders() }
-                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al agregar item: ${error.message}" } }
+                .onFailure {
+                    val payload = JSONObject().apply {
+                        put("order_id", orderId)
+                        put("menu_item_id", menuItem.id)
+                        put("quantity", 1)
+                        put("notes", notes)
+                        unitPriceOverride?.let { put("unit_price", it) }
+                    }.toString()
+                    encolarOperacion(OperacionPendiente(tipo = TipoOperacion.AGREGAR_ITEM, payload = payload))
+                }
         }
     }
 
@@ -893,7 +1039,81 @@ class RestaurantViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             apiClient.removeItemFromOrder(orderId, itemId)
                 .onSuccess { loadOrders() }
-                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al eliminar item: ${error.message}" } }
+                .onFailure {
+                    val payload = JSONObject().apply {
+                        put("order_id", orderId)
+                        put("item_id", itemId)
+                    }.toString()
+                    encolarOperacion(OperacionPendiente(tipo = TipoOperacion.ELIMINAR_ITEM, payload = payload))
+                }
+        }
+    }
+
+    // ── Cola offline ──
+    var operacionesPendientes by mutableStateOf(0)
+
+    private suspend fun encolarOperacion(op: OperacionPendiente) {
+        val prefs = dataStore.data.first()
+        val colaActual = prefs[PrefKeys.COLA_OFFLINE] ?: "[]"
+        val arr = JSONArray(colaActual)
+        arr.put(op.toJson())
+        dataStore.edit { it[PrefKeys.COLA_OFFLINE] = arr.toString() }
+        withContext(Dispatchers.Main) {
+            operacionesPendientes = arr.length()
+            programarWorkerCola(contextoApp)
+        }
+    }
+
+    fun procesarCola() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val prefs = dataStore.data.first()
+            val colaStr = prefs[PrefKeys.COLA_OFFLINE] ?: "[]"
+            val arr = JSONArray(colaStr)
+            if (arr.length() == 0) return@launch
+            val procesadas = mutableListOf<String>()
+            for (i in 0 until arr.length()) {
+                val op = operacionPendienteFromJson(arr.getJSONObject(i))
+                val p = JSONObject(op.payload)
+                val resultado = when (op.tipo) {
+                    TipoOperacion.ACTUALIZAR_ESTADO ->
+                        apiClient.updateOrderStatus(p.getInt("order_id"), p.getString("status"))
+                    TipoOperacion.ASIGNAR_MESA ->
+                        apiClient.assignTableAndStart(p.getInt("order_id"), p.getInt("table_id"))
+                    TipoOperacion.AGREGAR_ITEM ->
+                        apiClient.addItemToOrder(
+                            p.getInt("order_id"), p.getInt("menu_item_id"),
+                            p.getInt("quantity"), p.getString("notes"),
+                            if (p.has("unit_price")) p.getDouble("unit_price") else null
+                        )
+                    TipoOperacion.ELIMINAR_ITEM ->
+                        apiClient.removeItemFromOrder(p.getInt("order_id"), p.getInt("item_id"))
+                    TipoOperacion.CREAR_COMANDA -> {
+                        val itemsArr = p.getJSONArray("items")
+                        val items = List(itemsArr.length()) { j ->
+                            val itemJson = itemsArr.getJSONObject(j)
+                            OrderItem(
+                                menuItem = menuItems.find { it.id == itemJson.getInt("menu_item_id") }
+                                    ?: return@launch,
+                                quantity = itemJson.getInt("quantity"),
+                                notes    = itemJson.getString("notes")
+                            )
+                        }
+                        apiClient.createOrder(p.getInt("table_id"), items)
+                    }
+                }
+                resultado.onSuccess { procesadas.add(op.id) }
+            }
+            if (procesadas.isNotEmpty()) {
+                // Remover las procesadas de la cola
+                val nuevaArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val obj = arr.getJSONObject(i)
+                    if (obj.getString("id") !in procesadas) nuevaArr.put(obj)
+                }
+                dataStore.edit { it[PrefKeys.COLA_OFFLINE] = nuevaArr.toString() }
+                withContext(Dispatchers.Main) { operacionesPendientes = nuevaArr.length() }
+                loadOrders()
+            }
         }
     }
 
@@ -1021,7 +1241,7 @@ fun PinchToZoomLayout(content: @Composable () -> Unit) {
 @Composable
 fun SplashScreen(onFinished: () -> Unit) {
     LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(2500)
+        kotlinx.coroutines.delay(1500)
         onFinished()
     }
     Box(
@@ -1058,7 +1278,7 @@ fun RestaurantApp() {
     val API_BASE_URL = "http://192.168.1.21:5000"
     val context = LocalContext.current
     val apiClient = remember { ApiClient(API_BASE_URL) }
-    val viewModel = remember { RestaurantViewModel(apiClient, context.dataStore) }
+    val viewModel = remember { RestaurantViewModel(apiClient, context.dataStore, context.applicationContext) }
     var currentScreen by remember { mutableStateOf("menu") }
     LaunchedEffect(Unit) {
         viewModel.startConfigStream(API_BASE_URL)
@@ -1070,8 +1290,27 @@ fun RestaurantApp() {
             NavigationBar {
                 NavigationBarItem(icon = { Icon(Icons.Default.Restaurant, null) }, label = { Text("Menú") },
                     selected = currentScreen == "menu", onClick = { currentScreen = "menu" })
-                NavigationBarItem(icon = { Icon(Icons.AutoMirrored.Filled.ListAlt, null) }, label = { Text("Comandas") },
-                    selected = currentScreen == "orders", onClick = { currentScreen = "orders" })
+                NavigationBarItem(
+                    icon = {
+                        Box {
+                            Icon(Icons.AutoMirrored.Filled.ListAlt, null)
+                            if (viewModel.operacionesPendientes > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .align(Alignment.TopEnd)
+                                        .background(
+                                            color = Color(0xFFFF9800),
+                                            shape = androidx.compose.foundation.shape.CircleShape
+                                        )
+                                )
+                            }
+                        }
+                    },
+                    label = { Text("Comandas") },
+                    selected = currentScreen == "orders",
+                    onClick = { currentScreen = "orders" }
+                )
                 NavigationBarItem(icon = { Icon(Icons.Default.History, null) }, label = { Text("Historial") },
                     selected = currentScreen == "historial", onClick = { currentScreen = "historial" })
                 NavigationBarItem(icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Config") },
@@ -1765,7 +2004,19 @@ fun OrdersScreen(viewModel: RestaurantViewModel) {
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Comandas") },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Comandas")
+                    if (viewModel.operacionesPendientes > 0) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            "⏳ ${viewModel.operacionesPendientes} pendiente${if (viewModel.operacionesPendientes > 1) "s" else ""}",
+                            fontSize = 12.sp,
+                            color = Color(0xFFFF9800)
+                        )
+                    }
+                }
+            },
             actions = {
                 if (selectedTab == 2) {
                     if (modoSeleccion && selectedTerminadas.isNotEmpty()) {
@@ -1904,7 +2155,9 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
     var modoEdicion by remember { mutableStateOf(false) }
     var itemWithOptions by remember { mutableStateOf<MenuItem?>(null) }
     var itemWithMenuCompleto by remember { mutableStateOf<MenuItem?>(null) }
-    var tabPagos by remember { mutableStateOf(0) } // 0=Detalle, 1=Pagos
+    var tabPagos by remember { mutableStateOf(0) }
+    var itemEditando by remember { mutableStateOf<OrderItemDetail?>(null) }
+    var showReasignarMesa by remember { mutableStateOf(false) }
 
     val currentOrder = viewModel.orders.find { it.orderId == order.orderId } ?: order
     val propina = currentOrder.total * 0.10
@@ -1943,9 +2196,19 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             // Items actuales con altura máxima y scroll propio
             Card(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp).heightIn(max = 200.dp)) {
                 Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-                    Text("Items actuales:", fontWeight = FontWeight.Bold)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text("Items actuales:", fontWeight = FontWeight.Bold)
+                        if (currentOrder.items.size > 3)
+                            Text("↕ desliza", fontSize = 11.sp, fontStyle = FontStyle.Italic,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     currentOrder.items.forEach { item ->
+                        val menuItemRef = viewModel.menuItems.find { it.name.equals(item.name, ignoreCase = true) }
+                        val tieneOpciones = menuItemRef != null &&
+                                (ITEMS_CON_MENU.any { it.equals(item.name, ignoreCase = true) } ||
+                                        ITEM_OPTIONS.containsKey(item.name))
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1956,6 +2219,18 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                                 if (item.notes.isNotEmpty()) {
                                     Text(item.notes, fontSize = 12.sp, fontStyle = FontStyle.Italic,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            if (tieneOpciones) {
+                                IconButton(onClick = {
+                                    itemEditando = item
+                                    if (ITEMS_CON_MENU.any { it.equals(item.name, ignoreCase = true) })
+                                        itemWithMenuCompleto = menuItemRef
+                                    else
+                                        itemWithOptions = menuItemRef
+                                }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Editar item",
+                                        tint = MaterialTheme.colorScheme.primary)
                                 }
                             }
                             IconButton(onClick = { viewModel.removeItemFromExistingOrder(currentOrder.orderId, item.id) }) {
@@ -2027,7 +2302,17 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
             // ── MODO VISTA NORMAL ──
             Card(modifier = Modifier.padding(16.dp)) {
                 Column(modifier = Modifier.padding(16.dp).verticalScroll(rememberScrollState())) {
-                    Text("Mesa ${currentOrder.tableNumber}", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Mesa ${currentOrder.tableNumber}", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                        IconButton(onClick = { showReasignarMesa = true }) {
+                            Icon(Icons.Default.TableRestaurant, contentDescription = "Cambiar mesa",
+                                tint = MaterialTheme.colorScheme.primary)
+                        }
+                    }
                     Text("Estado: ${when(currentOrder.status) {
                         "pending" -> "Pendiente"
                         "in_progress" -> "En preparación"
@@ -2197,10 +2482,51 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                             Text("Pago dividido")
                         }
                     }
+
+
+                    if (showReasignarMesa) {
+                        AlertDialog(
+                            onDismissRequest = { showReasignarMesa = false },
+                            title = { Text("Cambiar mesa") },
+                            text = {
+                                LazyColumn {
+                                    items(viewModel.tables) { table ->
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(4.dp)
+                                                .clickable {
+                                                    viewModel.reassignTable(currentOrder.orderId, table.id)
+                                                    showReasignarMesa = false
+                                                },
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                                            )
+                                        ) {
+                                            Text(
+                                                text = when (table.name) {
+                                                    "Para llevar" -> "Para llevar"
+                                                    "Reserva" -> "📋 Reserva"
+                                                    else -> "Mesa ${table.name}"
+                                                },
+                                                modifier = Modifier.padding(16.dp),
+                                                fontSize = 18.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
+                                    }
+                                }
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { showReasignarMesa = false }) { Text("Cancelar") }
+                            }
+                        )
+                    }
                 }
             }
         }
-    }
+        }
 
         // Diálogos en modo edición
         var notasJugoPendiente by remember { mutableStateOf<Pair<MenuItem, String>?>(null) }
@@ -2213,11 +2539,15 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                     if (item.name in ITEMS_CON_DULCE) {
                         notasJugoPendiente = Pair(item, selectedOptions)
                     } else {
+                        itemEditando?.let { editando ->
+                            viewModel.removeItemFromExistingOrder(currentOrder.orderId, editando.id)
+                            itemEditando = null
+                        }
                         viewModel.addItemToExistingOrder(currentOrder.orderId, item, selectedOptions)
                     }
                     itemWithOptions = null
                 },
-                onDismiss = { itemWithOptions = null }
+                onDismiss = { itemWithOptions = null; itemEditando = null }
             )
         }
 
@@ -2247,10 +2577,14 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                 showPlatos = item.name != "Churrasco al plato",
                 papasFritasItem = viewModel.menuItems.find { it.name == "Papas fritas guarnicion especial" },
                 onConfirm = { notas, priceOverride ->
+                    itemEditando?.let { editando ->
+                        viewModel.removeItemFromExistingOrder(currentOrder.orderId, editando.id)
+                        itemEditando = null
+                    }
                     viewModel.addItemToExistingOrder(currentOrder.orderId, item, notas, priceOverride)
                     itemWithMenuCompleto = null
                 },
-                onDismiss = { itemWithMenuCompleto = null }
+                onDismiss = { itemWithMenuCompleto = null; itemEditando = null }
             )
         }
 
@@ -3188,12 +3522,87 @@ fun generarMenuSemanal(platos: List<String>, dias: List<String>): String {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// WORKER — PROCESA COLA CUANDO VUELVE LA RED
+// ═══════════════════════════════════════════════════════════════
+
+class ColaOfflineWorker(
+    context: android.content.Context,
+    params: WorkerParameters
+) : CoroutineWorker(context, params) {
+
+    override suspend fun doWork(): Result {
+        val dataStore = applicationContext.dataStore
+        val prefs = dataStore.data.first()
+        val colaStr = prefs[PrefKeys.COLA_OFFLINE] ?: "[]"
+        if (JSONArray(colaStr).length() == 0) return Result.success()
+
+        // Recuperar la IP guardada para construir el ApiClient
+        val baseUrl = prefs[PrefKeys.RESTAURANT_NAME]?.let {
+            "http://192.168.1.21:5000"
+        } ?: "http://192.168.1.21:5000"
+
+        val apiClient = ApiClient(baseUrl)
+        val arr = JSONArray(colaStr)
+        val procesadas = mutableListOf<String>()
+
+        for (i in 0 until arr.length()) {
+            val op = operacionPendienteFromJson(arr.getJSONObject(i))
+            val p = JSONObject(op.payload)
+            val resultado = when (op.tipo) {
+                TipoOperacion.ACTUALIZAR_ESTADO ->
+                    apiClient.updateOrderStatus(p.getInt("order_id"), p.getString("status"))
+                TipoOperacion.ASIGNAR_MESA ->
+                    apiClient.assignTableAndStart(p.getInt("order_id"), p.getInt("table_id"))
+                TipoOperacion.AGREGAR_ITEM ->
+                    apiClient.addItemToOrder(
+                        p.getInt("order_id"), p.getInt("menu_item_id"),
+                        p.getInt("quantity"), p.getString("notes"),
+                        if (p.has("unit_price")) p.getDouble("unit_price") else null
+                    )
+                TipoOperacion.ELIMINAR_ITEM ->
+                    apiClient.removeItemFromOrder(p.getInt("order_id"), p.getInt("item_id"))
+                TipoOperacion.CREAR_COMANDA ->
+                    kotlin.Result.failure(Exception("Crear comanda requiere datos del menú, omitida en worker"))
+            }
+            resultado.onSuccess { procesadas.add(op.id) }
+        }
+
+        if (procesadas.isNotEmpty()) {
+            val nuevaArr = JSONArray()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                if (obj.getString("id") !in procesadas) nuevaArr.put(obj)
+            }
+            dataStore.edit { it[PrefKeys.COLA_OFFLINE] = nuevaArr.toString() }
+        }
+
+        return Result.success()
+    }
+}
+
+fun programarWorkerCola(context: android.content.Context) {
+    val constraints = Constraints.Builder()
+        .setRequiredNetworkType(NetworkType.CONNECTED)
+        .build()
+    val request = OneTimeWorkRequestBuilder<ColaOfflineWorker>()
+        .setConstraints(constraints)
+        .build()
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        "cola_offline",
+        ExistingWorkPolicy.REPLACE,
+        request
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════
 // ACTIVITY PRINCIPAL
 // ═══════════════════════════════════════════════════════════════
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Si hay operaciones pendientes de sesiones anteriores, programar el worker
+        programarWorkerCola(applicationContext)
         setContent {
             MaterialTheme {
                 RestaurantApp()

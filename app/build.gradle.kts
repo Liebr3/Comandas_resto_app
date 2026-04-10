@@ -44,6 +44,9 @@ android {
 }
 
 dependencies {
+    //     resiliencia
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     // Compose BOM
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
