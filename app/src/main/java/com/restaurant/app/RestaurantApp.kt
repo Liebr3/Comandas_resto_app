@@ -1870,28 +1870,9 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
             val itemsCategoria = viewModel.menuItems.filter {
                 it.category.equals(categoriaSeleccionada, ignoreCase = true)
             }
-            Column(modifier = Modifier.weight(1f)) {
-                // Botón volver
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { categoriaSeleccionada = null }
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver",
-                        tint = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        CATEGORIAS_ORDEN.find { it.first.equals(categoriaSeleccionada, ignoreCase = true) }
-                            ?.let { "${it.second} ${it.first}" } ?: categoriaSeleccionada ?: "",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                }
-                HorizontalDivider()
+            Box(modifier = Modifier.weight(1f)) {
                 LazyColumn(
-                    contentPadding = PaddingValues(8.dp),
+                    contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 80.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(itemsCategoria.chunked(2)) { fila ->
@@ -1935,6 +1916,23 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                             if (fila.size == 1) Spacer(modifier = Modifier.weight(1f))
                         }
                     }
+                }
+                // FAB volver — flotante abajo a la derecha
+                ExtendedFloatingActionButton(
+                    onClick = { categoriaSeleccionada = null },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 16.dp),
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver")
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        CATEGORIAS_ORDEN.find { it.first.equals(categoriaSeleccionada, ignoreCase = true) }
+                            ?.let { "${it.second} ${it.first}" } ?: categoriaSeleccionada ?: "",
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }
