@@ -1614,6 +1614,35 @@ val CATEGORIAS_ORDEN = listOf(
     "tablas"        to "🪵",
     "Te"            to "🍵"
 )
+
+// Items destacados por categoría — orden define prioridad visual
+val ITEMS_DESTACADOS: Map<String, List<String>> = mapOf(
+    "refrescos" to listOf(
+        "bebida lata", "jugo natural", "jugo tropical",
+        "frapuccino", "limonada menta/jengibre", "limonada"
+    ),
+    "cafes" to listOf(
+        "Capuccino vainilla", "Capuccino Chantilly", "Americano", "Latte",
+        "Capuccino", "Cortado", "Capuccino vainilla doble", "Capuccino Chantilly doble",
+        "Capuccino Doble", "Cortado doble", "Mokaccino", "Mokaccino doble", "Espresso"
+    )
+)
+
+// Paletas de degradé por categoría — del más vendido al menos vendido
+val COLORES_DESTACADOS: Map<String, List<Color>> = mapOf(
+    "refrescos" to listOf(
+        Color(0xFF00BCD4), Color(0xFF00ACC1), Color(0xFF0097A7),
+        Color(0xFF00838F), Color(0xFF006064), Color(0xFF01579B)
+    ),
+    "cafes" to listOf(
+        Color(0xFFFFD54F), Color(0xFFFFCA28), Color(0xFFFFB300),
+        Color(0xFFFFA000), Color(0xFFFF8F00), Color(0xFFFF6F00),
+        Color(0xFFE65100), Color(0xFFBF360C), Color(0xFF8D6E63),
+        Color(0xFF795548), Color(0xFF6D4C41), Color(0xFF5D4037),
+        Color(0xFF4E342E)
+    )
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 
@@ -1867,9 +1896,26 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
             }
         } else {
             // ── SUBMENU DE ITEMS DE LA CATEGORÍA ──
-            val itemsCategoria = viewModel.menuItems.filter {
-                it.category.equals(categoriaSeleccionada, ignoreCase = true)
+            val destacados = ITEMS_DESTACADOS[categoriaSeleccionada?.lowercase()]
+                ?: ITEMS_DESTACADOS[categoriaSeleccionada]
+                ?: emptyList()
+            val coloresDestacados = COLORES_DESTACADOS[categoriaSeleccionada?.lowercase()]
+                ?: COLORES_DESTACADOS[categoriaSeleccionada]
+                ?: emptyList()
+
+            val itemsCategoria = run {
+                val todos = viewModel.menuItems.filter {
+                    it.category.equals(categoriaSeleccionada, ignoreCase = true)
+                }
+                val enOrden = destacados.mapNotNull { nombre ->
+                    todos.find { it.name.equals(nombre, ignoreCase = true) }
+                }
+                val resto = todos.filter { item ->
+                    destacados.none { it.equals(item.name, ignoreCase = true) }
+                }.sortedBy { it.name }
+                enOrden + resto
             }
+
             Box(modifier = Modifier.weight(1f)) {
                 LazyColumn(
                     contentPadding = PaddingValues(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 80.dp),
@@ -1881,6 +1927,15 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             fila.forEach { item ->
+                                val posicion = itemsCategoria.indexOf(item)
+                                val esDestacado = posicion < destacados.size
+                                val colorFondo = if (esDestacado && posicion < coloresDestacados.size)
+                                    coloresDestacados[posicion]
+                                else
+                                    MaterialTheme.colorScheme.primaryContainer
+                                val colorTexto = if (esDestacado) Color.White
+                                else MaterialTheme.colorScheme.onPrimaryContainer
+
                                 Card(
                                     modifier = Modifier.weight(1f).clickable {
                                         when {
@@ -1889,9 +1944,7 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                                             else -> viewModel.addItemToCurrentOrder(item)
                                         }
                                     },
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                                    )
+                                    colors = CardDefaults.cardColors(containerColor = colorFondo)
                                 ) {
                                     Column(
                                         modifier = Modifier.padding(12.dp).fillMaxWidth(),
@@ -1901,13 +1954,15 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                                             item.name,
                                             fontSize = 14.sp,
                                             fontWeight = FontWeight.Bold,
-                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                            color = colorTexto
                                         )
                                         Spacer(modifier = Modifier.height(4.dp))
                                         Text(
                                             formatCLP(item.price),
                                             fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.primary,
+                                            color = if (esDestacado) Color.White.copy(alpha = 0.9f)
+                                            else MaterialTheme.colorScheme.primary,
                                             fontWeight = FontWeight.SemiBold
                                         )
                                     }
