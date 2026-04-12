@@ -1625,22 +1625,31 @@ val ITEMS_DESTACADOS: Map<String, List<String>> = mapOf(
         "Capuccino vainilla", "Capuccino Chantilly", "Americano", "Latte",
         "Capuccino", "Cortado", "Capuccino vainilla doble", "Capuccino Chantilly doble",
         "Capuccino Doble", "Cortado doble", "Mokaccino", "Mokaccino doble", "Espresso"
+    ),
+    "sandwiches" to listOf(
+        "Hamburguesa casa morena", "Churrasco italiano", "Barros luco", "Hamburguesa brasilera",
+        "Chacarero", "Barros luco", "Barros jarpa", "Churrasco tomate"
     )
 )
 
 // Paletas de degradé por categoría — del más vendido al menos vendido
 val COLORES_DESTACADOS: Map<String, List<Color>> = mapOf(
     "refrescos" to listOf(
-        Color(0xFF00BCD4), Color(0xFF00ACC1), Color(0xFF0097A7),
-        Color(0xFF00838F), Color(0xFF006064), Color(0xFF01579B)
+        Color(0xFF00ACC1), Color(0xFF00ACC1), Color(0xFF00838F),
+        Color(0xFF00838F), Color(0xFF01579B), Color(0xFF01579B)
     ),
     "cafes" to listOf(
-        Color(0xFFFFD54F), Color(0xFFFFCA28), Color(0xFFFFB300),
-        Color(0xFFFFA000), Color(0xFFFF8F00), Color(0xFFFF6F00),
-        Color(0xFFE65100), Color(0xFFBF360C), Color(0xFF8D6E63),
-        Color(0xFF795548), Color(0xFF6D4C41), Color(0xFF5D4037),
+        Color(0xFFFFCA28), Color(0xFFFFCA28), Color(0xFFFFA000),
+        Color(0xFFFFA000), Color(0xFFFF6F00), Color(0xFFFF6F00),
+        Color(0xFFBF360C), Color(0xFFBF360C), Color(0xFF795548),
+        Color(0xFF795548), Color(0xFF5D4037), Color(0xFF5D4037),
         Color(0xFF4E342E)
-    )
+    ),
+    "sandwiches" to listOf(
+        Color(0xFFFF9A3CL), Color(0xFFFF9A3CL), Color(0xFFFF6B2BL),
+        Color(0xFFFF6B2BL), Color(0xFFE03A1AL), Color(0xFFE03A1AL),
+        Color(0xFFB51508L), Color(0xFFB51508L)
+    ),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
