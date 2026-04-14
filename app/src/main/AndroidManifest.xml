@@ -17,6 +17,7 @@
         
         <!-- usesCleartextTraffic="true" permite HTTP (no HTTPS) 
              Necesario para conectar a la Raspberry Pi en LAN -->
+	
         
         <activity
             android:name=".MainActivity"

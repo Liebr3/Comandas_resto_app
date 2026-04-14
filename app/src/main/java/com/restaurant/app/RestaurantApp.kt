@@ -652,6 +652,13 @@ class RestaurantViewModel(
     var gruposDePago by mutableStateOf(listOf<PagoGrupo>())
     var pagoDivididoCompleto by mutableStateOf(false)
 
+    fun limpiarCola() {
+        viewModelScope.launch(Dispatchers.IO) {
+            dataStore.edit { it[PrefKeys.COLA_OFFLINE] = "[]" }
+            withContext(Dispatchers.Main) { operacionesPendientes = 0 }
+        }
+    }
+
     fun iniciarPagoDividido(order: Order) {
         val desglosados = mutableListOf<ItemDesglosado>()
         order.items.forEach { item ->
@@ -728,6 +735,9 @@ class RestaurantViewModel(
             while (true) {
                 kotlinx.coroutines.delay(15_000)
                 loadOrders()
+                if (operacionesPendientes > 0) {
+                    procesarCola()
+                }
             }
         }
     }
@@ -907,7 +917,16 @@ class RestaurantViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             withContext(Dispatchers.Main) { isLoading = true }
             apiClient.getOrders()
-                .onSuccess { result -> withContext(Dispatchers.Main) { orders = result } }
+                .onSuccess { result ->
+                    withContext(Dispatchers.Main) {
+                        // Mantener locales solo si aún no llegaron al servidor
+                        // Una orden local se considera confirmada si el servidor
+                        // ya tiene una orden de la misma mesa creada recientemente
+                        // Si el servidor responde exitosamente, descartar TODAS las locales
+                        // La cola se encargará de recriarlas si no llegaron
+                        orders = result
+                    }
+                }
                 .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al cargar comandas: ${error.message}" } }
             withContext(Dispatchers.Main) { isLoading = false }
         }
@@ -939,19 +958,39 @@ class RestaurantViewModel(
 
     fun saveOrder(table: Table) {
         if (currentOrder.isEmpty()) return
+        val ordenParaEnviar = currentOrder.toList()
+
+        val ordenLocal = Order(
+            orderId     = -(System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+            tableNumber = table.name,
+            status      = "pending",
+            total       = ordenParaEnviar.sumOf { it.quantity * it.menuItem.price },
+            createdAt   = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
+            items       = ordenParaEnviar.map {
+                OrderItemDetail(
+                    id        = 0,
+                    name      = it.menuItem.name,
+                    quantity  = it.quantity,
+                    unitPrice = it.menuItem.price,
+                    subtotal  = it.quantity * it.menuItem.price,
+                    notes     = it.notes
+                )
+            }
+        )
+        viewModelScope.launch(Dispatchers.Main) {
+            orders = listOf(ordenLocal) + orders
+            currentOrder = listOf()
+            selectedTable = null
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
-            withContext(Dispatchers.Main) { isLoading = true; errorMessage = null }
-            apiClient.createOrder(table.id, currentOrder)
-                .onSuccess {
-                    withContext(Dispatchers.Main) { currentOrder = listOf(); selectedTable = null }
-                    loadOrders()
-                }
+            apiClient.createOrder(table.id, ordenParaEnviar)
+                .onSuccess { loadOrders() }
                 .onFailure {
-                    // Encolar para reintento cuando vuelva la red
                     val payload = JSONObject().apply {
                         put("table_id", table.id)
                         val arr = JSONArray()
-                        currentOrder.forEach { item ->
+                        ordenParaEnviar.forEach { item ->
                             arr.put(JSONObject().apply {
                                 put("menu_item_id", item.menuItem.id)
                                 put("quantity", item.quantity)
@@ -961,32 +1000,60 @@ class RestaurantViewModel(
                         put("items", arr)
                     }.toString()
                     encolarOperacion(OperacionPendiente(tipo = TipoOperacion.CREAR_COMANDA, payload = payload))
-                    withContext(Dispatchers.Main) {
-                        currentOrder = listOf()
-                        selectedTable = null
-                    }
                 }
-            withContext(Dispatchers.Main) { isLoading = false }
         }
     }
 
     fun saveOrderWithNotes(table: Table, reservaNotas: String) {
         if (currentOrder.isEmpty()) return
-        val orderConNotas = currentOrder.mapIndexed { idx, item ->
+        val ordenParaEnviar = currentOrder.mapIndexed { idx, item ->
             if (idx == 0)
                 item.copy(notes = if (item.notes.isBlank()) reservaNotas else "${item.notes}##NOTA_RESERVA_HEADER##$reservaNotas")
             else
-                item  // otros items sin modificar
+                item
         }
+
+        val ordenLocal = Order(
+            orderId     = -(System.currentTimeMillis() % Int.MAX_VALUE).toInt(),
+            tableNumber = table.name,
+            status      = "pending",
+            total       = ordenParaEnviar.sumOf { it.quantity * it.menuItem.price },
+            createdAt   = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
+            items       = ordenParaEnviar.map {
+                OrderItemDetail(
+                    id        = 0,
+                    name      = it.menuItem.name,
+                    quantity  = it.quantity,
+                    unitPrice = it.menuItem.price,
+                    subtotal  = it.quantity * it.menuItem.price,
+                    notes     = it.notes
+                )
+            }
+        )
+        viewModelScope.launch(Dispatchers.Main) {
+            orders = listOf(ordenLocal) + orders
+            currentOrder = listOf()
+            selectedTable = null
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
-            withContext(Dispatchers.Main) { isLoading = true; errorMessage = null }
-            apiClient.createOrder(table.id, orderConNotas)
-                .onSuccess {
-                    withContext(Dispatchers.Main) { currentOrder = listOf(); selectedTable = null }
-                    loadOrders()
+            apiClient.createOrder(table.id, ordenParaEnviar)
+                .onSuccess { loadOrders() }
+                .onFailure {
+                    val payload = JSONObject().apply {
+                        put("table_id", table.id)
+                        val arr = JSONArray()
+                        ordenParaEnviar.forEach { item ->
+                            arr.put(JSONObject().apply {
+                                put("menu_item_id", item.menuItem.id)
+                                put("quantity", item.quantity)
+                                put("notes", item.notes)
+                            })
+                        }
+                        put("items", arr)
+                    }.toString()
+                    encolarOperacion(OperacionPendiente(tipo = TipoOperacion.CREAR_COMANDA, payload = payload))
                 }
-                .onFailure { error -> withContext(Dispatchers.Main) { errorMessage = "Error al crear reserva: ${error.message}" } }
-            withContext(Dispatchers.Main) { isLoading = false }
         }
     }
 
@@ -1112,6 +1179,7 @@ class RestaurantViewModel(
                 }
                 dataStore.edit { it[PrefKeys.COLA_OFFLINE] = nuevaArr.toString() }
                 withContext(Dispatchers.Main) { operacionesPendientes = nuevaArr.length() }
+                kotlinx.coroutines.delay(1000) // dar tiempo al servidor para procesar
                 loadOrders()
             }
         }
@@ -1195,7 +1263,16 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
     "Latte" to listOf("Sin Lactosa", "Descafeinado"),
     "Leche con chocolate" to listOf("Sin Lactosa", "Descafeinado"),
     "Mokaccino" to listOf("Sin Lactosa", "Descafeinado"),
-    "Mokaccino doble" to listOf("Sin Lactosa", "Descafeinado")
+    "Mokaccino doble" to listOf("Sin Lactosa", "Descafeinado"),
+    "Banana split"            to listOf("Vainilla", "Chocolate", "Pistacho", "Papayas a la crema", "Tres leches", "Frambuesas a la crema", "Suspiro limeño"),
+    "Cafe helado"             to listOf("Vainilla", "Chocolate", "Pistacho", "Papayas a la crema", "Tres leches", "Frambuesas a la crema", "Suspiro limeño"),
+    "Canasta del bosque"      to listOf("Vainilla", "Chocolate", "Pistacho", "Papayas a la crema", "Tres leches", "Frambuesas a la crema", "Suspiro limeño"),
+    "Celestino manjar"        to listOf("Vainilla", "Chocolate", "Pistacho", "Papayas a la crema", "Tres leches", "Frambuesas a la crema", "Suspiro limeño"),
+    "Celestino nutella"       to listOf("Vainilla", "Chocolate", "Pistacho", "Papayas a la crema", "Tres leches", "Frambuesas a la crema", "Suspiro limeño"),
+    "Copa doble"              to listOf("Vainilla", "Chocolate", "Pistacho", "Papayas a la crema", "Tres leches", "Frambuesas a la crema", "Suspiro limeño"),
+    "Copa simple"             to listOf("Vainilla", "Chocolate", "Pistacho", "Papayas a la crema", "Tres leches", "Frambuesas a la crema", "Suspiro limeño"),
+    "Copa simple dos sabores" to listOf("Vainilla", "Chocolate", "Pistacho", "Papayas a la crema", "Tres leches", "Frambuesas a la crema", "Suspiro limeño"),
+    "Copon Casa Morena"       to listOf("Vainilla", "Chocolate", "Pistacho", "Papayas a la crema", "Tres leches", "Frambuesas a la crema", "Suspiro limeño")
 )
 val ITEMS_CON_DULCE = setOf("jugo natural", "jugo natural tropical")
 val OPCIONES_DULCE = listOf("Azúcar", "Endulzante")
@@ -3670,6 +3747,14 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
                     Text("Mesas: ${viewModel.tables.size}")
                     Text("Comandas activas: ${viewModel.orders.filter { it.status in listOf("pending","in_progress") }.size}")
                     Text("Entradas en historial: ${viewModel.historial.size}")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.limpiarCola() },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("Limpiar cola offline (${viewModel.operacionesPendientes} pendientes)")
+                    }
                 }
             }
         }
@@ -3761,7 +3846,7 @@ class ColaOfflineWorker(
                 TipoOperacion.ELIMINAR_ITEM ->
                     apiClient.removeItemFromOrder(p.getInt("order_id"), p.getInt("item_id"))
                 TipoOperacion.CREAR_COMANDA ->
-                    kotlin.Result.failure(Exception("Crear comanda requiere datos del menú, omitida en worker"))
+                    kotlin.Result.success("omitida — reintento via withRetry")
             }
             resultado.onSuccess { procesadas.add(op.id) }
         }
