@@ -1186,7 +1186,7 @@ class RestaurantViewModel(
     }
 
     fun guardarEnHistorial(order: Order) {
-        val propina = order.total * 0.10
+        val propina = if (order.tableNumber == "Para llevar") 0.0 else order.total * 0.10
         val totalConPropina = order.total + propina
         val ahora = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.getDefault())
             .format(java.util.Date())
@@ -1249,6 +1249,9 @@ val ITEM_OPTIONS: Map<String, List<String>> = mapOf(
     "Crepes 1 ingrediente" to listOf("Champiñón", "Choclo", "Pollo", "Pimentón", "Jamón", "Aceitunas", "Espinaca"),
     "Crepes 2 ingredientes" to listOf("Champiñón", "Choclo", "Pollo", "Pimentón", "Jamón", "Aceitunas", "Espinaca"),
     "bebida lata" to listOf("Coca Cola", "Coca Zero", "Kem Piña", "Limón Soda", "Bilz", "Pap", "Canada Dry"),
+    "Americano" to listOf("Descafeinado"),
+    "Espresso" to listOf("Descafeinado"),
+    "Espresso Doble" to listOf("Descafeinado"),
     "Cafe Bombon" to listOf("Sin Lactosa", "Descafeinado"),
     "Cafe con leche" to listOf("Sin Lactosa", "Descafeinado"),
     "Capuccino" to listOf("Sin Lactosa", "Descafeinado"),
@@ -1318,7 +1321,7 @@ fun PinchToZoomLayout(content: @Composable () -> Unit) {
 @Composable
 fun SplashScreen(onFinished: () -> Unit) {
     LaunchedEffect(Unit) {
-        kotlinx.coroutines.delay(1500)
+        kotlinx.coroutines.delay(1000)
         onFinished()
     }
     Box(
@@ -1675,6 +1678,7 @@ val CATEGORIAS_ORDEN = listOf(
     "Menus Diarios" to "⭐",
     "refrescos"     to "🥤",
     "cafes"         to "☕",
+    "Te"            to "🍵",
     "Fajitas"       to "🌮",
     "helados"       to "🍨",
     "Pizzas"        to "🍕",
@@ -1688,8 +1692,7 @@ val CATEGORIAS_ORDEN = listOf(
     "extras"        to "➕",
     "Ingrediente extra" to "🧂",
     "papas fritas"  to "🍟",
-    "tablas"        to "🪵",
-    "Te"            to "🍵"
+    "tablas"        to "🪵"
 )
 
 // Items destacados por categoría — orden define prioridad visual
@@ -1697,6 +1700,10 @@ val ITEMS_DESTACADOS: Map<String, List<String>> = mapOf(
     "refrescos" to listOf(
         "bebida lata", "jugo natural", "jugo tropical",
         "frapuccino", "limonada menta/jengibre", "limonada"
+    ),
+    "Dulces" to listOf(
+        "Pie de limon", "Torta", "Panqueque manjar",
+        "Panqueque nutella"
     ),
     "cafes" to listOf(
         "Capuccino vainilla", "Capuccino Chantilly", "Americano", "Latte",
@@ -1726,6 +1733,10 @@ val COLORES_DESTACADOS: Map<String, List<Color>> = mapOf(
         Color(0xFFFF9A3CL), Color(0xFFFF9A3CL), Color(0xFFFF6B2BL),
         Color(0xFFFF6B2BL), Color(0xFFE03A1AL), Color(0xFFE03A1AL),
         Color(0xFFB51508L), Color(0xFFB51508L)
+    ),
+    "Dulces" to listOf(
+        Color(0xFFFF9A3CL), Color(0xFFFF9A3CL), Color(0xFFFF6B2BL),
+        Color(0xFFFF6B2BL)
     ),
 )
 
@@ -2089,7 +2100,11 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                 if (item.name in ITEMS_CON_DULCE) {
                     notasJugoPendiente = Pair(item, selectedOptions)
                 } else {
-                    viewModel.addItemToCurrentOrder(item, selectedOptions)
+                    val extra = selectedOptions.split(",").count { opt ->
+                        opt.trim() in listOf("Sin Lactosa", "Descafeinado")
+                    } * 350.0
+                    val precio = if (extra > 0) item.price + extra else null
+                    viewModel.addItemToCurrentOrder(item, selectedOptions, precio)
                 }
                 itemWithOptions = null
             },
@@ -2436,7 +2451,8 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
     var showReasignarMesa by remember { mutableStateOf(false) }
 
     val currentOrder = viewModel.orders.find { it.orderId == order.orderId } ?: order
-    val propina = currentOrder.total * 0.10
+    val esParaLlevar = currentOrder.tableNumber == "Para llevar"
+    val propina = if (esParaLlevar) 0.0 else currentOrder.total * 0.10
     val totalConPropina = currentOrder.total + propina
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -2815,11 +2831,15 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                     if (item.name in ITEMS_CON_DULCE) {
                         notasJugoPendiente = Pair(item, selectedOptions)
                     } else {
+                        val extra = selectedOptions.split(",").count { opt ->
+                            opt.trim() in listOf("Sin Lactosa", "Descafeinado")
+                        } * 350.0
+                        val precio = if (extra > 0) item.price + extra else null
                         itemEditando?.let { editando ->
                             viewModel.removeItemFromExistingOrder(currentOrder.orderId, editando.id)
                             itemEditando = null
                         }
-                        viewModel.addItemToExistingOrder(currentOrder.orderId, item, selectedOptions)
+                        viewModel.addItemToExistingOrder(currentOrder.orderId, item, selectedOptions, precio)
                     }
                     itemWithOptions = null
                 },
