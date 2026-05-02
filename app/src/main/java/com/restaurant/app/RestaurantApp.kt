@@ -1697,6 +1697,10 @@ val CATEGORIAS_ORDEN = listOf(
 
 // Items destacados por categoría — orden define prioridad visual
 val ITEMS_DESTACADOS: Map<String, List<String>> = mapOf(
+
+    "Menus Diarios" to listOf(
+        "Menu normal"
+    ),
     "refrescos" to listOf(
         "bebida lata", "jugo natural", "jugo tropical",
         "frapuccino", "limonada menta/jengibre", "limonada"
@@ -1718,6 +1722,9 @@ val ITEMS_DESTACADOS: Map<String, List<String>> = mapOf(
 
 // Paletas de degradé por categoría — del más vendido al menos vendido
 val COLORES_DESTACADOS: Map<String, List<Color>> = mapOf(
+    "Menus Diarios" to listOf(
+        Color(0xFFFF9A3CL)
+    ),
     "refrescos" to listOf(
         Color(0xFF00ACC1), Color(0xFF00ACC1), Color(0xFF00838F),
         Color(0xFF00838F), Color(0xFF01579B), Color(0xFF01579B)
