@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
@@ -624,6 +625,18 @@ class RestaurantViewModel(
     var platosDelDia by mutableStateOf(listOf<String>())
     var menuExtraDelDia by mutableStateOf("")
 
+    // Stock de platos del día
+    var stockPorPlato by mutableStateOf(mapOf<String, Int>())
+
+    fun setStockPlato(plato: String, cantidad: Int) {
+        stockPorPlato = stockPorPlato + (plato to cantidad)
+    }
+
+    fun decrementarStockPlato(plato: String) {
+        val actual = stockPorPlato[plato] ?: return
+        if (actual > 0) stockPorPlato = stockPorPlato + (plato to actual - 1)
+    }
+
     // Configuración de impresión
     var restaurantName by mutableStateOf("Mi Restaurante")
     var footerText by mutableStateOf("Gracias por su visita")
@@ -941,6 +954,14 @@ class RestaurantViewModel(
         } else {
             currentOrder + OrderItem(menuItem, 1, notes, unitPriceOverride)
         }
+        // Descontar stock si es un item con menú
+        if (ITEMS_CON_MENU.any { it.equals(menuItem.name, ignoreCase = true) }) {
+            notes.split("|").map { it.trim() }
+                .firstOrNull { it.startsWith("Plato:") }
+                ?.removePrefix("Plato:")
+                ?.trim()
+                ?.let { decrementarStockPlato(it) }
+        }
     }
 
     fun removeItemFromCurrentOrder(menuItem: MenuItem, notes: String = "") {
@@ -1086,6 +1107,14 @@ class RestaurantViewModel(
     }
 
     fun addItemToExistingOrder(orderId: Int, menuItem: MenuItem, notes: String = "", unitPriceOverride: Double? = null) {
+        // Descontar stock si es un item con menú
+        if (ITEMS_CON_MENU.any { it.equals(menuItem.name, ignoreCase = true) }) {
+            notes.split("|").map { it.trim() }
+                .firstOrNull { it.startsWith("Plato:") }
+                ?.removePrefix("Plato:")
+                ?.trim()
+                ?.let { decrementarStockPlato(it) }
+        }
         viewModelScope.launch(Dispatchers.IO) {
             apiClient.addItemToOrder(orderId, menuItem.id, 1, notes, unitPriceOverride)
                 .onSuccess { loadOrders() }
@@ -1479,7 +1508,8 @@ fun MenuCompletoDialog(
     onConfirm: (notas: String, unitPriceOverride: Double?) -> Unit,
     onDismiss: () -> Unit,
     showPlatos: Boolean = true,
-    papasFritasItem: MenuItem? = null
+    papasFritasItem: MenuItem? = null,
+    stockPorPlato: Map<String, Int> = emptyMap()
 ) {
     val platoSeleccionado = remember { mutableStateOf<String?>(null) }
     val entradaSeleccionada = remember { mutableStateOf<String?>(null) }
@@ -1500,16 +1530,46 @@ fun MenuCompletoDialog(
                         fontStyle = FontStyle.Italic)
                     } else {
                         platos.forEach { plato ->
+                            val stockRestante = stockPorPlato[plato]
+                            val agotado = stockRestante != null && stockRestante <= 0
+                            val colorStock = when {
+                                stockRestante == null -> Color.Transparent
+                                stockRestante <= 2    -> Color.Red
+                                else                  -> Color(0xFF1565C0)
+                            }
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    platoSeleccionado.value = plato
-                                }.padding(vertical = 2.dp)
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .then(
+                                        if (agotado) Modifier
+                                        else Modifier.clickable { platoSeleccionado.value = plato }
+                                    )
+                                    .padding(vertical = 2.dp)
                             ) {
                                 RadioButton(
                                     selected = platoSeleccionado.value == plato,
-                                    onClick = { platoSeleccionado.value = plato })
-                                Text(plato, modifier = Modifier.padding(start = 4.dp))
+                                    onClick = { if (!agotado) platoSeleccionado.value = plato },
+                                    enabled = !agotado
+                                )
+                                Column(modifier = Modifier.padding(start = 4.dp)) {
+                                    Text(
+                                        text = plato,
+                                        color = if (agotado)
+                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        else
+                                            MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (stockRestante != null) {
+                                        Text(
+                                            text = if (agotado) "Agotado" else "$stockRestante",
+                                            color = if (agotado) MaterialTheme.colorScheme.onSurfaceVariant
+                                            else colorStock,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -1963,31 +2023,60 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         fila.forEach { (cat, icono) ->
-                            Card(
-                                modifier = Modifier.weight(1f).height(90.dp).clickable {
-                                    categoriaSeleccionada = cat
-                                },
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (cat == "Menus Diarios")
-                                        MaterialTheme.colorScheme.primaryContainer
-                                    else
-                                        MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Column(
-                                    modifier = Modifier.fillMaxSize(),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
-                                ) {
-                                    Text(icono, fontSize = 28.sp)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        cat,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                        modifier = Modifier.padding(horizontal = 4.dp)
+                            val stockMinimo = if (cat == "Menus Diarios" && viewModel.platosDelDia.isNotEmpty()) {
+                                viewModel.platosDelDia
+                                    .mapNotNull { viewModel.stockPorPlato[it] }
+                                    .minOrNull()
+                            } else null
+
+                            Box(modifier = Modifier.weight(1f)) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().height(90.dp).clickable {
+                                        categoriaSeleccionada = cat
+                                    },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (cat == "Menus Diarios")
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        else
+                                            MaterialTheme.colorScheme.surfaceVariant
                                     )
+                                ) {
+                                    Column(
+                                        modifier = Modifier.fillMaxSize(),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(icono, fontSize = 28.sp)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            cat,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                            modifier = Modifier.padding(horizontal = 4.dp)
+                                        )
+                                    }
+                                }
+                                if (stockMinimo != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(6.dp)
+                                            .size(22.dp)
+                                            .background(
+                                                color = if (stockMinimo <= 2) Color.Red
+                                                else Color(0xFF1565C0),
+                                                shape = androidx.compose.foundation.shape.CircleShape
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "$stockMinimo",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2150,6 +2239,7 @@ fun MenuScreen(viewModel: RestaurantViewModel) {
             guarniciones = viewModel.guarnicionesDelDia,
             showPlatos = item.name != "Churrasco al plato",
             papasFritasItem = viewModel.menuItems.find { it.name == "Papas fritas guarnicion especial" },
+            stockPorPlato = viewModel.stockPorPlato,
             onConfirm = { notas, priceOverride ->
                 viewModel.addItemToCurrentOrder(item, notas, priceOverride)
                 itemWithMenuCompleto = null
@@ -2313,27 +2403,56 @@ fun MenuGridEdicion(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         fila.forEach { (cat, icono) ->
-                            Card(
-                                modifier = Modifier.weight(1f).height(90.dp).clickable {
-                                    categoriaSeleccionada = cat
-                                },
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (cat == "Menus Diarios")
-                                        MaterialTheme.colorScheme.primaryContainer
-                                    else
-                                        MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Column(
-                                    modifier = Modifier.fillMaxSize(),
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    verticalArrangement = Arrangement.Center
+                            val stockMinimo = if (cat == "Menus Diarios" && viewModel.platosDelDia.isNotEmpty()) {
+                                viewModel.platosDelDia
+                                    .mapNotNull { viewModel.stockPorPlato[it] }
+                                    .minOrNull()
+                            } else null
+
+                            Box(modifier = Modifier.weight(1f)) {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().height(90.dp).clickable {
+                                        categoriaSeleccionada = cat
+                                    },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (cat == "Menus Diarios")
+                                            MaterialTheme.colorScheme.primaryContainer
+                                        else
+                                            MaterialTheme.colorScheme.surfaceVariant
+                                    )
                                 ) {
-                                    Text(icono, fontSize = 28.sp)
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(cat, fontSize = 13.sp, fontWeight = FontWeight.Bold,
-                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                                        modifier = Modifier.padding(horizontal = 4.dp))
+                                    Column(
+                                        modifier = Modifier.fillMaxSize(),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(icono, fontSize = 28.sp)
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(cat, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                            modifier = Modifier.padding(horizontal = 4.dp))
+                                    }
+                                }
+                                if (stockMinimo != null) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .padding(6.dp)
+                                            .size(22.dp)
+                                            .background(
+                                                color = if (stockMinimo <= 2) Color.Red
+                                                else Color(0xFF1565C0),
+                                                shape = androidx.compose.foundation.shape.CircleShape
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = "$stockMinimo",
+                                            color = Color.White,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -3028,6 +3147,7 @@ fun OrderDetail(order: Order, viewModel: RestaurantViewModel, isTerminada: Boole
                 guarniciones = viewModel.guarnicionesDelDia,
                 showPlatos = item.name != "Churrasco al plato",
                 papasFritasItem = viewModel.menuItems.find { it.name == "Papas fritas guarnicion especial" },
+                stockPorPlato = viewModel.stockPorPlato,
                 onConfirm = { notas, priceOverride ->
                     itemEditando?.let { editando ->
                         viewModel.removeItemFromExistingOrder(currentOrder.orderId, editando.id)
@@ -3691,6 +3811,38 @@ fun ConfigScreen(viewModel: RestaurantViewModel) {
                         Text("Activos hoy:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                         viewModel.platosDelDia.forEach { p ->
                             Text("• $p", fontSize = 13.sp)
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Stock disponible por plato:", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        viewModel.platosDelDia.forEach { plato ->
+                            val stockActual = viewModel.stockPorPlato[plato] ?: 0
+                            var stockInput by remember(plato) { mutableStateOf(stockActual.toString()) }
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = plato,
+                                    modifier = Modifier.weight(1f),
+                                    fontSize = 13.sp
+                                )
+                                OutlinedTextField(
+                                    value = stockInput,
+                                    onValueChange = { nuevo ->
+                                        stockInput = nuevo.filter { it.isDigit() }
+                                        stockInput.toIntOrNull()?.let {
+                                            viewModel.setStockPlato(plato, it)
+                                        }
+                                    },
+                                    modifier = Modifier.width(80.dp),
+                                    singleLine = true,
+                                    label = { Text("Uds.", fontSize = 11.sp) }
+                                )
+                            }
                         }
                     }
                 }
